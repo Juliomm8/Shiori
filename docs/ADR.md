@@ -321,6 +321,26 @@ Example media types include:
 
 Using one collection allows us to retrieve all adaptations of a franchise with one indexed query.
 
+## Release Tracks for Manga and Light Novel Items
+
+A Manga or Light Novel `catalogItem` does not store one single scalar value for "latest known unit."
+
+Instead, it stores a small nested structure with one entry per supported release track. Current tracks are:
+
+- Japanese raw publication.
+- Official English release.
+
+Each track entry stores:
+
+- Track identifier.
+- Latest known volume or chapter for that track.
+- Last synchronization timestamp.
+- Source used to populate the track.
+
+We need this structure because a Manga or Light Novel item does not have one single "latest release." A reader following the raw publication and a reader following the licensed English release can be at different points in the same story at the same time. A single scalar field cannot represent both at once.
+
+MongoDB's flexible document model makes this a natural schema change. We added the nested track structure directly to existing `catalogItems` documents. We did not need a migration step, a new collection, or any change to unrelated media types such as Anime.
+
 ## Subset Pattern for Main Characters
 
 We use the Subset Pattern to embed the **10 main characters** most relevant to each catalog item.
@@ -424,6 +444,7 @@ We must maintain:
 - Indexes on `franchiseId`, `mediaType`, and provider identifiers.
 - Partial indexes for format-specific fields.
 - Schema validation based on `mediaType`.
+- Schema validation for release track entries on Manga and Light Novel items.
 - Bounded subsets for characters, links, and summaries.
 - Idempotent Change Stream consumers.
 - Resume token storage and recovery.
@@ -473,8 +494,17 @@ The main tables are:
 - Revision number.
 - Start, completion, and update timestamps.
 - `pending_catalog_sync` status when needed.
+- Selected release track, or a manual mode flag.
 
 We enforce one active tracking entry per user and catalog item.
+
+## Release Track Selection
+
+`tracking_entries` stores the release track the user follows for that item, or a manual mode flag.
+
+Manual mode applies when Shiori does not offer an automated track for the user's language or edition. In manual mode, Tracking stores progress normally, but does not compute or show any "behind schedule" comparison.
+
+A user can change the selected track later without losing existing progress. A track change updates the comparison basis only. It does not rewrite `progress_history`.
 
 ## Audiovisual Progress
 
@@ -573,6 +603,14 @@ Catalog publishes domain events through RabbitMQ.
 
 Tracking consumes those events and updates its local projections.
 
+## Release Track Projection
+
+`catalog_unit_registry` mirrors the same release track structure stored in Catalog's `catalogItems` documents.
+
+For each tracked Manga or Light Novel item, the registry stores the latest known volume or chapter per track, not a single scalar value.
+
+This keeps the comparison used by Release Intelligence, such as "you are 3 chapters behind," based on data that Tracking owns locally. Tracking does not make a synchronous call to Catalog to show this comparison.
+
 ## Outbox and Inbox
 
 Catalog uses the Transactional Outbox Pattern when publishing events.
@@ -627,6 +665,16 @@ The projection must process:
 - Publication unit retirement.
 
 We use versioned events so Tracking can ignore stale or duplicated updates.
+
+### `CatalogItemUpdated` Is Required, Not Optional
+
+Earlier versions of this document treated `CatalogItemUpdated` consumption as a future improvement.
+
+We now treat it as a required part of the projection, not an optional one.
+
+Release Track comparisons in Tracking depend on the latest known volume or chapter per track, mirrored from Catalog. If Tracking does not consume `CatalogItemUpdated`, the local track data freezes at the moment the item was created. New chapters or volumes released after that point never reach Tracking, and any "you are behind" comparison becomes incorrect.
+
+We treat a stale local projection as a correctness bug, not as a delay we can accept indefinitely.
 
 ## Alternatives Considered
 
@@ -793,6 +841,8 @@ The flow is:
 7. The consumer creates or updates tracking entries in controlled batches.
 8. Inbox records prevent duplicate processing.
 9. Progress and final status are stored for client polling or notification.
+
+ADR-011 describes the staging, catalog matching, and confirmation steps in detail.
 
 We do not parse and import the full XML file inside the original HTTP request.
 
@@ -1065,6 +1115,8 @@ RabbitMQ delivers the work to a background consumer.
 
 The consumer uses Inbox and Outbox records for reliable processing.
 
+The consumer writes parsed entries into staging tables inside the Tracking Service database. It does not call any external metadata provider directly. It delegates all external hydration to the Catalog Service.
+
 ## Job Lifecycle
 
 An import job can move through states such as:
@@ -1072,10 +1124,13 @@ An import job can move through states such as:
 - `Pending`
 - `Validating`
 - `Processing`
-- `PartiallyCompleted`
+- `AwaitingConfirmation`
 - `Completed`
+- `PartiallyCompleted`
 - `Failed`
 - `Cancelled`
+
+`AwaitingConfirmation` means staging and catalog matching finished, and Shiori is waiting for the user to confirm the Preview.
 
 The service stores:
 
@@ -1099,6 +1154,45 @@ We record enough information to resume or safely retry the job.
 
 A failed record does not need to fail the whole import unless the file is invalid at the document level.
 
+## Staging and Catalog Matching
+
+We do not write imported records directly into `tracking_entries` while the job is processing.
+
+The consumer first writes each parsed entry into a staging table.
+
+For each staged entry, the consumer checks the local Catalog projection, `catalog_item_registry`, for a matching identifier.
+
+- If Tracking already knows the catalog item, the consumer links the staged entry to it directly.
+- If Tracking does not know the catalog item, the consumer does not resolve it alone.
+
+## The Import Worker Does Not Call AniList
+
+Catalog Service is the only Anti-Corruption Layer for external metadata providers. We defined this boundary in ADR-002.
+
+If the import worker called AniList directly, Shiori would have two independent integration points for the same provider. Each one would need its own rate limiting and normalization logic, and the two could drift out of sync over time.
+
+Instead, for identifiers Tracking does not know, the import worker publishes a batch hydration request event through RabbitMQ. Catalog Service consumes this event and hydrates the missing items using its existing Cache-Aside flow against AniList.
+
+Catalog Service publishes the resulting `CatalogItemCreated` events as usual. The import worker's Inbox consumer processes them like any other catalog event, and updates the matching staged entries.
+
+## Preview and Confirmation
+
+The client builds the Preview from the staging tables once matching completes.
+
+The user reviews the Preview and confirms the import, or cancels it.
+
+On confirmation, we move matched staging rows into `tracking_entries` and the related progress tables inside one local PostgreSQL transaction. Staging tables and tracking tables live in the same database, so one local transaction is enough.
+
+We do not use a distributed Saga or a cross-service rollback for this step.
+
+## Single Completion Event
+
+We do not publish one event per imported record.
+
+The same local transaction that moves staging rows into `tracking_entries` also writes a single Outbox record for `UserLibraryImportCompleted`.
+
+This follows the same Outbox pattern we already defined in ADR-006. It also avoids flooding RabbitMQ with thousands of individual events for one import job.
+
 ## Gateway Impact
 
 The API Gateway only handles:
@@ -1110,6 +1204,18 @@ The API Gateway only handles:
 - Returning the accepted job response.
 
 The Gateway does not parse XML or wait for the complete import.
+
+## Alternatives Considered
+
+### Import worker calls AniList directly
+
+We rejected this. Catalog Service is the only Anti-Corruption Layer for external providers. A second direct integration point would duplicate rate limiting and normalization logic, and could drift out of sync with Catalog Service's own caching rules.
+
+### Distributed Saga with compensating rollback
+
+We considered a compensating Saga to support undoing a partial import. We rejected it for the current scope.
+
+Staging tables remove the need for compensation. Nothing enters `tracking_entries` until the user confirms the Preview, so there is nothing live to compensate for before that point. After confirmation, the move into `tracking_entries` happens inside one local transaction, not a distributed one.
 
 ## Consequences
 
@@ -1123,6 +1229,8 @@ We need:
 - Import retention rules.
 - Retry and dead-letter policies.
 - Cleanup of completed files and jobs.
+- Staging table cleanup after confirmation or cancellation.
+- A versioned contract for the Catalog hydration request event.
 
 ---
 
@@ -1222,6 +1330,8 @@ The following items require separate ADRs or implementation policies:
 12. Define how Shiori handles provider removals, merged catalog items, and franchise regrouping.
 13. Define a formal schema and compatibility policy for integration events.
 14. Define data retention for progress history and completed import jobs.
+15. Define staging table retention and cleanup rules after import confirmation or cancellation.
+16. Define the schema and versioning policy for the Catalog hydration request event used by the import worker.
 
 ---
 
