@@ -1,0 +1,91 @@
+name: Sync repository labels
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/labels.json
+      - .github/workflows/sync-labels.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sync-labels:
+    name: Create and update labels
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Create or update managed labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          jq -c '.[]' .github/labels.json | while read -r label; do
+            name="$(jq -r '.name' <<< "$label")"
+            color="$(jq -r '.color' <<< "$label")"
+            description="$(jq -r '.description' <<< "$label")"
+
+            gh label create "$name" \
+              --repo "$GH_REPO" \
+              --color "$color" \
+              --description "$description" \
+              --force
+          done
+
+      - name: Remove superseded default labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          default_labels=(
+            "bug"
+            "documentation"
+            "duplicate"
+            "enhancement"
+            "invalid"
+            "question"
+            "wontfix"
+          )
+
+          for label in "${default_labels[@]}"; do
+            if gh label list --repo "$GH_REPO" --limit 200 --json name --jq '.[].name' | grep -Fxq "$label"; then
+              gh label delete "$label" --repo "$GH_REPO" --yes
+            fi
+          done
+
+      - name: Verify managed label count
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          expected="$(jq 'length' .github/labels.json)"
+          missing=0
+
+          while IFS= read -r name; do
+            if ! gh label list --repo "$GH_REPO" --limit 200 --json name --jq '.[].name' | grep -Fxq "$name"; then
+              echo "Missing label: $name"
+              missing=$((missing + 1))
+            fi
+          done < <(jq -r '.[].name' .github/labels.json)
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+          echo "Verified $expected managed labels."
