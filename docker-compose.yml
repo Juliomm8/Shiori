@@ -1,0 +1,91 @@
+services:
+  postgres-identity:
+    image: postgres:18
+    container_name: shiori-postgres-identity
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shiori_identity
+      POSTGRES_PASSWORD: shiori_identity_dev_password
+      POSTGRES_DB: shiori_identity
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-identity-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shiori_identity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shiori-network
+
+  postgres-tracking:
+    image: postgres:18
+    container_name: shiori-postgres-tracking
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shiori_tracking
+      POSTGRES_PASSWORD: shiori_tracking_dev_password
+      POSTGRES_DB: shiori_tracking
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-tracking-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shiori_tracking"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shiori-network
+
+  mongodb:
+    image: mongo:8
+    container_name: shiori-mongodb
+    restart: unless-stopped
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shiori-network
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: shiori-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: shiori
+      RABBITMQ_DEFAULT_PASS: shiori_dev_password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shiori-network
+
+networks:
+  shiori-network:
+    name: shiori-network
+
+volumes:
+  postgres-identity-data:
+    name: shiori-postgres-identity-data
+  postgres-tracking-data:
+    name: shiori-postgres-tracking-data
+  mongodb-data:
+    name: shiori-mongodb-data
+  rabbitmq-data:
+    name: shiori-rabbitmq-data
