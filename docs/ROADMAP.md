@@ -2,473 +2,890 @@
 
 **Status:** Active  
 **Last updated:** July 2026  
-**Scope:** Official development roadmap for Shiori, sequencing the work required to deliver `FEATURES.md` on top of the architecture accepted in `ADR.md`.
+**Scope:** Development sequence for delivering the approved Phase 1 product on top of the architecture recorded in `ADR.md`.
 
 ---
 
-## Introduction
+## Why this roadmap is milestone-based
 
-This roadmap is organized by **milestones**, not by calendar time. Shiori is entering active development, and committing to months or dates this early would be a guess presented as a plan.
+I am deliberately not attaching calendar dates to these milestones yet.
 
-Each milestone is sequenced by two priorities:
+At this stage, dates would be guesses. What matters more is dependency order: Identity has to exist before protected services can be exercised properly, Catalog has to produce stable data before Tracking can consume it, and Tracking has to exist before Import and Release Intelligence can be finished safely.
 
-1. **Technical dependency** — what must exist and work correctly before the next layer can be completed.
-2. **Delivered value** — every milestone must leave Shiori in a coherent and demonstrable state.
+So this roadmap is organized around two questions:
 
-No milestone introduces a new architectural decision. Every deliverable below traces back to a decision accepted in `ADR.md` or a feature approved in `FEATURES.md`. This roadmap sequences that work; it does not redesign it.
+1. What has to exist before the next piece can be built correctly?
+2. What usable result should exist when the milestone is finished?
 
-This roadmap covers backend delivery and end-to-end product integration. Web and mobile client work may proceed in parallel once a milestone's API contracts are stable, but a milestone is not complete until its user-visible flows have been verified through at least one reference client.
+The roadmap sequences accepted work. It is not meant to redesign the architecture as implementation begins.
+
+Web and future client work can move in parallel once the relevant API contracts stabilize, but a milestone is not considered finished until its important user-facing flows work through the Gateway and have been exercised end to end.
+
+---
+
+# Engineering Definition of Done
+
+These expectations apply throughout the roadmap rather than being postponed until launch.
+
+For each milestone, as applicable:
+
+- active executables have production-ready Dockerfiles
+- local infrastructure can be started through Docker Compose
+- database changes are versioned and repeatable
+- PostgreSQL migrations and MongoDB bootstrap/migration behavior are verified in CI
+- public API changes update OpenAPI and receive compatibility review
+- public errors follow RFC 9457 Problem Details
+- integration messages use versioned contracts
+- business rules have focused unit tests
+- infrastructure behavior is tested against realistic containerized dependencies
+- CI restores, builds, tests, audits dependencies, validates migrations, and builds images
+- configuration is environment-specific
+- secrets are not committed
+- service credentials follow least privilege
+- structured logs, health checks, metrics, tracing, and correlation grow with the system
+- milestone exit criteria work through YARP rather than only through direct service calls
+
+The point is to avoid reaching Milestone 5B with a working feature set but no repeatable delivery, observability, or migration discipline.
 
 ---
 
-## Engineering Definition of Done
+# Milestone 1 — Foundation, Delivery Pipeline & Identity
 
-The milestones below are integration gates. The following engineering requirements apply to every milestone rather than being deferred to the final launch milestone:
+This milestone gives the rest of the system something stable to build on.
 
-- Every executable service has a production-ready Dockerfile and is included in the local Docker Compose environment when it becomes active.
-- Every database change is versioned, repeatable, and verified in CI. PostgreSQL uses explicit migrations; MongoDB uses versioned bootstrap and migration processes for indexes, validators, and document changes.
-- Every public API change includes an OpenAPI contract, a backward-compatibility review, consistent RFC 9457 Problem Details responses, and automated contract tests.
-- Every integration event uses a versioned event envelope and has producer and consumer contract tests.
-- Every business rule has focused unit tests, and every infrastructure boundary has integration tests against real containerized dependencies.
-- CI restores and builds the full solution, runs automated tests, audits dependencies, validates migrations, and builds service container images.
-- Configuration is environment-specific, secrets are never committed to source control, and each service uses its own least-privilege credentials.
-- Structured logs, metrics, distributed traces, health checks, and correlation identifiers are extended with each new service and message flow.
-- A milestone is complete only when its exit criteria work through the API Gateway and are verified end to end.
+Before Catalog and Tracking become real services, Shiori needs:
 
----
-## Milestone 1: Foundation, Delivery Pipeline & Identity
+- a working repository/solution structure
+- a repeatable local environment
+- Identity capable of issuing and managing tokens
+- YARP as the public entry point
+- service shells that can validate Identity-issued JWTs
+- CI and migration behavior that are already trustworthy
 
-Nothing else can be built or meaningfully tested without this milestone. Every protected service depends on Identity issuing valid tokens, and every public client request depends on the API Gateway as its single entry point.
+## Deliverables
 
-### Deliverables
+### Solution and runtime structure
 
-- Repository and solution structure reflecting the three-service boundary from day one: Identity, Catalog, and Tracking as independently deployable projects rather than folders inside one application.
-- Dockerfiles for the API Gateway and Identity Service.
-- A Docker Compose environment containing the active services and all required infrastructure.
-- PostgreSQL, MongoDB, and RabbitMQ fully wired for local development.
-- MongoDB configured as a single-node replica set in local development so later Change Stream behavior can be tested without changing the environment model.
-- **Identity Service**, using OpenIddict for OAuth2/OIDC token issuance, refresh-token rotation, revocation, discovery, and signing-key endpoints.
-- Credentials and the public User Profile modeled as separate tables inside Identity.
-- **YARP API Gateway**, routing to Identity and forwarding intact JWTs downstream without replacing them with plain trust headers.
-- Baseline account flows:
-  - Registration.
-  - Login.
-  - Logout.
-  - Token refresh.
-  - Token revocation.
-  - Account recovery.
-- Service shell endpoints in Catalog and Tracking for health checks and independent JWT validation, without domain functionality yet.
-- An explicit Identity database migration strategy, including repeatable local bootstrap and deployment-time migration verification.
-- A CI pipeline that:
-  - Restores dependencies.
-  - Builds the full solution.
-  - Runs automated tests.
-  - Audits NuGet dependencies.
-  - Validates Identity migrations.
-  - Builds container images.
-- Environment-specific configuration and secret management, including development signing certificates or keys that are never committed to source control.
-- Baseline HTTP conventions:
-  - API versioning.
-  - OpenAPI generation.
-  - RFC 9457 Problem Details.
-  - Request correlation.
-  - Gateway rate-limiting support.
-- Baseline observability:
-  - Structured logging.
-  - Health checks.
-  - Correlation identifiers.
-  - Initial metrics.
-  - Distributed tracing foundations.
+- Repository and solution structure reflecting the Identity, Catalog, and Tracking service boundaries from the beginning.
+- Dockerfiles for:
+  - YARP Gateway
+  - Identity Service
+- Docker Compose environment for active services and infrastructure.
+- Local infrastructure wired for:
+  - PostgreSQL
+  - MongoDB
+  - RabbitMQ
+- MongoDB configured as a single-node replica set locally so Change Streams can be tested later without changing the environment model.
 
-### Exit Criteria
+### Identity
 
-A client can register, log in, refresh and revoke its session, and recover account access through the Gateway.
+Identity uses OpenIddict for:
 
-The Gateway, Catalog service shell, and Tracking service shell run in containers, and each protected service independently validates a token issued by Identity.
+- OAuth2/OIDC token issuance
+- refresh-token rotation
+- revocation
+- discovery
+- signing-key endpoints
 
-The full solution builds and tests successfully in CI, Identity migrations can be applied to a clean PostgreSQL instance, and the local environment starts through Docker Compose with PostgreSQL, MongoDB configured as a replica set, and RabbitMQ reporting healthy.
+Identity persistence separates:
 
----
-## Milestone 2A: Catalog Core & Provider Integration
+```text
+credentials/authentication data
+from
+public User Profile data
+```
 
-Catalog becomes Shiori's trusted Anti-Corruption Layer over external metadata providers. This milestone establishes the canonical data model and reliable ingestion before exposing the complete discovery experience.
+Baseline account flows:
 
-### Deliverables
+- Registration
+- Login
+- Logout
+- Token refresh
+- Token revocation
+- Account recovery
 
-- **Catalog Service** backed by MongoDB, implementing the hybrid model through:
-  - `franchises`
-  - `catalogItems`
-  - Bucketed `publicationUnits`
-- Versioned MongoDB bootstrap and migration processes for:
-  - Indexes.
-  - Partial indexes.
-  - Schema validators.
-  - Document schema versions.
-  - Data migration scripts.
-- **AniList integration** as the primary metadata source.
-- AniList resilience policies:
-  - Timeouts.
-  - Rate-limit handling.
-  - Retries with backoff.
-  - Circuit breaking.
-  - Cache-Aside reads.
-  - Stale-data behavior.
-  - Provider latency and error metrics.
-- **MangaDex integration**, scoped to Manga and Manhwa volume and chapter enrichment.
-- MangaDex resilience and observability using the same standards as AniList.
-- Bounded Subset Pattern projections for:
-  - Up to 10 main characters.
-  - Verified official consumption links.
-- Release Track structures for every supported media type, including:
-  - Original Release.
-  - Official English Release.
-- Release Track metadata:
-  - Source and provenance.
-  - Last verification timestamp.
-  - Support status.
-  - Staleness status.
-  - Unit type used by the track.
-- MongoDB Change Streams with:
-  - Persisted resume tokens.
-  - Idempotent processing.
-  - Full recomputation of affected franchise summaries.
-  - Recovery after service restarts.
-- Scheduled synchronization and refresh jobs for provider-backed data.
-- Unit and integration tests for:
-  - Provider mapping.
-  - Cache behavior.
-  - Rate-limit handling.
-  - Change Stream recovery.
-  - MongoDB schema bootstrap.
+Identity also needs an explicit migration strategy with:
 
-### Exit Criteria
+- repeatable local bootstrap
+- clean-database migration verification
+- deployment-time migration checks
 
-Catalog can import, normalize, cache, update, and serve canonical catalog items and franchises from AniList and MangaDex.
+### Gateway and protected-service shells
 
-Provider outages do not corrupt local data, stale cached data is handled explicitly, Change Stream processing resumes safely after restart, and all MongoDB indexes and validators can be recreated from a clean environment.
+YARP:
+
+- routes public requests
+- forwards intact bearer tokens
+- does not replace them with plain trust headers
+
+Catalog and Tracking begin as service shells with:
+
+- health endpoints
+- protected endpoints
+- independent JWT validation
+
+They do not need domain functionality yet.
+
+### CI and configuration
+
+CI should:
+
+- restore dependencies
+- build the full solution
+- run automated tests
+- audit NuGet dependencies
+- validate Identity migrations
+- build container images
+
+Configuration must be environment-specific.
+
+Development signing certificates/keys and other secrets are never committed to source control.
+
+### HTTP and observability baseline
+
+Establish the first shared platform conventions:
+
+- API versioning
+- OpenAPI generation
+- RFC 9457 Problem Details
+- request correlation
+- Gateway rate-limiting support
+- structured logging
+- health checks
+- initial metrics
+- distributed tracing foundations
+
+## Exit criteria
+
+Milestone 1 is complete when:
+
+- a client can register, log in, refresh/revoke a session, and recover account access through YARP
+- Gateway, Catalog shell, and Tracking shell run in containers
+- Catalog and Tracking independently validate an Identity-issued token
+- the full solution builds/tests in CI
+- Identity migrations apply successfully to a clean PostgreSQL instance
+- Docker Compose starts PostgreSQL, MongoDB replica set, and RabbitMQ in a healthy local environment
+
+At that point, the project has a real delivery foundation rather than only service folders.
 
 ---
-## Milestone 2B: Catalog Discovery & Reliable Messaging
 
-With the canonical catalog model stable, this milestone exposes the complete discovery experience and establishes reliable domain-event publishing for downstream services.
+# Milestone 2A — Catalog Core & Provider Integration
 
-### Deliverables
+This milestone makes Catalog the trusted Shiori layer over external metadata.
 
-- A documented and indexed search strategy for:
-  - Canonical titles.
-  - Native titles.
-  - Alternative titles.
-  - Media formats.
-  - Status filters.
-  - Pagination.
-  - Ranking behavior.
-  - Empty-result behavior.
-- The complete **Content Catalog & Discovery** feature set:
-  - Catalog item pages.
-  - Franchise relationship lists.
-  - Verified official consumption links.
-  - Trailers.
-  - Bounded character previews.
-  - Trending discovery.
-  - Seasonal discovery.
-  - Work-focused search.
-- YARP routes and authorization policies for Catalog endpoints.
-- A versioned integration-event envelope containing:
-  - Event identifier.
-  - Event type.
-  - Event version.
-  - Aggregate identifier.
-  - Aggregate version.
-  - Occurrence timestamp.
-  - Correlation metadata.
-  - Causation metadata when available.
-- Formal backward-compatibility rules for integration events.
-- **Transactional Outbox** persistence inside Catalog from the first operation that produces an integration event.
-- A reliable Outbox publisher using:
-  - RabbitMQ publisher confirms.
-  - Durable exchanges and queues.
-  - Retry policies.
-  - Dead-letter handling.
-  - Message versioning.
-- Catalog events for:
-  - `CatalogItemCreated`
-  - `CatalogItemUpdated`
-  - `CatalogItemRetired`
-  - `PublicationUnitCreated`
-  - `PublicationUnitUpdated`
-  - `PublicationUnitRetired`
-- Producer contract tests.
-- Operational metrics for:
-  - Outbox age.
-  - Failed publications.
-  - Queue depth.
-  - Dead-letter counts.
-  - Provider synchronization health.
+The priority is to establish canonical Shiori data and reliable ingestion before building the full discovery experience on top of it.
 
-### Exit Criteria
+## Deliverables
 
-A user can browse and search a complete cached catalog through the Gateway.
+### Catalog persistence
 
-Every committed catalog change that affects downstream services produces a durable Outbox record and is eventually published to RabbitMQ without relying on a best-effort in-memory publish.
+Catalog uses MongoDB with the hybrid model built around:
 
-The search and discovery APIs are documented, contract-tested, and verified through a reference client.
+- `franchises`
+- `catalogItems`
+- bucketed `publicationUnits`
 
----
-## Milestone 3: Core Tracking & Projections
+MongoDB setup is versioned for:
 
-Tracking cannot be completed in isolation. Its consistency model depends on consuming real, versioned events from Catalog. This is the first milestone where two domain services communicate asynchronously in production-like flows.
+- indexes
+- partial indexes
+- schema validators
+- document schema versions
+- data migration scripts
 
-### Deliverables
+### AniList
 
-- **Tracking Service** backed by PostgreSQL, implementing Table-Per-Type through:
-  - `tracking_entries`
-  - `audiovisual_progress`
-  - `reading_progress`
-- Explicit PostgreSQL migrations for all Tracking tables, constraints, indexes, and triggers.
-- The `progress_history` table, populated through database triggers so no supported write path can skip history capture.
-- Local Catalog projections:
-  - `catalog_item_registry`
-  - `catalog_unit_registry`
-- The local projection includes the Release Track mirror structure defined in Milestone 2A.
-- **Idempotent Inbox** processing on Tracking, consuming the versioned events and reliable Catalog Outbox publisher established in Milestone 2B.
-- A **Transactional Outbox** inside Tracking for Tracking-owned integration events.
-- Consumption of the full Catalog projection lifecycle:
-  - `CatalogItemCreated`
-  - `CatalogItemUpdated`
-  - `CatalogItemRetired`
-  - `PublicationUnitCreated`
-  - `PublicationUnitUpdated`
-  - `PublicationUnitRetired`
-- Aggregate-version checks so duplicated, stale, or out-of-order events cannot move a local projection backward.
-- Speculative insert handling for the "just discovered, immediately saved" race condition.
-- Background reconciliation for genuine orphan records.
-- **Polymorphic Tracking**:
-  - Episode and playback-position tracking for Anime.
-  - Volume, chapter, and page tracking for reading formats.
-  - Fractional chapter numbers.
-  - Extras.
-  - One-shots.
-  - Specials.
-  - Named chapter labels.
-- User-controlled Library Status values:
-  - `Planned`
-  - `InProgress`
-  - `Paused`
-  - `Completed`
-  - `Dropped`
-- Storage of:
-  - Selected release-track preference.
-  - Manual Track selection.
-- Release-relative `UpToDate` is not calculated in this milestone.
-- The complete **Library & Personalization** feature set:
-  - List privacy.
-  - Shareable profile integration.
-  - Watchlists and read-lists.
-  - Consumption dates.
-  - Scoring.
-  - Core aggregate statistics.
-- A public-library API that exposes only lists explicitly made public and composes safely with the public profile owned by Identity.
-- Optimistic concurrency using:
-  - ETags.
-  - `If-Match`.
-  - The Tracking revision column.
-- Idempotency-Key handling for retry-safe Tracking mutations.
-- Cursor-based pagination for history and library endpoints.
-- Automated tests for:
-  - Duplicate events.
-  - Out-of-order events.
-  - Projection lag.
-  - Speculative inserts.
-  - Concurrent progress updates.
-  - Idempotent retries.
-  - Orphan reconciliation.
-  - Trigger-based history capture.
+AniList is the primary metadata provider.
 
-### Exit Criteria
+Catalog needs resilience around:
 
-A user can search the catalog, add a title to their library, assign a Library Status, and track granular progress through the Gateway.
+- timeouts
+- rate limits
+- retries/backoff
+- circuit breaking
+- Cache-Aside behavior
+- stale-data behavior
+- latency/error metrics
 
-Catalog and Tracking remain consistent through durable asynchronous events, duplicate and out-of-order deliveries are handled safely, and no synchronous Catalog call exists in the progress write path.
+### MangaDex
 
-Release-relative states such as Up to Date are intentionally not calculated yet.
+MangaDex is used only for Manga/Manhwa volume and chapter enrichment.
+
+Its integration follows the same resilience/observability discipline as AniList.
+
+### Bounded projections
+
+Catalog supports bounded read-friendly subsets for:
+
+- up to 10 main characters
+- verified official consumption links
+
+### Release tracks
+
+Create the Release Track structures needed by the approved product direction, including:
+
+- Original Release
+- Official English Release
+
+Track metadata includes:
+
+- source/provenance
+- last verification time
+- support status
+- staleness status
+- unit type
+
+### Change Streams
+
+MongoDB Change Streams support derived franchise summaries with:
+
+- persisted resume tokens
+- idempotent processing
+- full recomputation of affected summaries
+- safe restart recovery
+
+### Background synchronization
+
+Provider-backed synchronization/refresh jobs run outside normal user-facing Catalog reads.
+
+### Tests
+
+Cover at least:
+
+- provider mapping
+- cache behavior
+- rate-limit handling
+- Change Stream recovery
+- MongoDB bootstrap
+
+## Exit criteria
+
+Catalog can:
+
+- import
+- normalize
+- cache
+- update
+- serve
+
+canonical Shiori catalog items and franchises using AniList and MangaDex.
+
+Provider failures do not corrupt existing Catalog state.
+
+Change Streams resume safely after restart.
+
+A clean MongoDB environment can recreate the required indexes and validators.
 
 ---
-## Milestone 4: Import Engine & Data Portability
 
-Bulk import is sequenced after Identity, Catalog, and Tracking because it depends on account ownership, catalog matching, local projections, and reliable background processing.
+# Milestone 2B — Catalog Discovery & Reliable Messaging
 
-### Deliverables
+Once the canonical Catalog model is stable, this milestone exposes discovery and introduces reliable asynchronous publishing for downstream consumers.
 
-- The import job lifecycle:
-  - `Pending`
-  - `Validating`
-  - `Processing`
-  - `AwaitingConfirmation`
-  - `Committing`
-  - `Completed`
-  - `PartiallyCompleted`
-  - `Failed`
-  - `Cancelled`
-- Staging tables inside the Tracking database for parsed import entries.
-- Secure temporary storage for uploaded files, including:
-  - Ownership checks.
-  - File-size limits.
-  - Retention rules.
-  - Cleanup jobs.
-  - Protection against unsafe XML features.
-- Gateway and service request-size limits specific to the import upload endpoint.
-- Versioned import parsers backed by representative:
-  - MyAnimeList fixtures.
-  - AniList-compatible fixtures.
-- Catalog matching against the local `catalog_item_registry` projection.
-- Batch hydration requests published to Catalog through RabbitMQ when Tracking does not recognize an identifier.
-- Catalog remains the only service authorized to query AniList or MangaDex.
-- Correlated batch hydration commands and result events with:
-  - Timeouts.
-  - Retries.
-  - Duplicate protection.
-  - Partial-failure reporting.
-- Preview generation from staging data, including:
-  - Matched records.
-  - Unmatched records.
-  - Ambiguous records.
-  - Invalid progress values.
-  - Proposed conflict resolutions.
-- Bulk conflict resolution such as "apply to all compatible remaining entries."
-- Resumable and idempotent import processing so a worker restart does not require restarting a completed staging job from zero.
-- Confirmed staging rows committed to Tracking in bounded, idempotent batches rather than one database transaction covering the entire file.
-- Import finalization performed atomically only after all expected batches complete.
-- One summary `UserLibraryImportCompleted` integration event per completed import rather than one event per imported record.
-- **Data Portability**:
-  - MyAnimeList-compatible current-state export.
-  - Complete Shiori archive export.
-- Import-path load tests covering:
-  - Large files.
-  - Repeated retries.
-  - Catalog hydration backlogs.
-  - Multiple concurrent import jobs.
-  - Worker restarts.
-  - Partial failures.
+## Deliverables
 
-### Exit Criteria
+### Search strategy
 
-A user can upload a supported list export, leave the request while it is processed asynchronously, review an accurate preview, resolve conflicts, confirm the staged result, and monitor the commit until completion.
+Document and index the search behavior for:
 
-The resulting library and current progress match the confirmed preview.
+- canonical titles
+- native titles
+- alternative titles
+- media formats
+- status filters
+- pagination
+- ranking
+- empty results
 
-Retries do not create duplicates, partial failures are visible and recoverable, and users can export both a portable current-state file and a complete Shiori archive.
+### Discovery experience
 
----
-## Milestone 5A: Intelligence & Final User Flows
+Complete the approved Catalog/Discovery surface:
 
-This milestone activates the product behavior built on top of the release structures, progress history, and library state established earlier.
+- Catalog item pages
+- franchise relationship lists
+- official links
+- trailers
+- bounded character previews
+- Trending
+- Seasonal
+- work-focused Search
 
-### Deliverables
+YARP routes and authorization policies are added for Catalog endpoints.
 
-- **Release Intelligence** calculated only from verified and supported data.
-- One user-selected active release track per tracked work.
-- Separate Library Status and release-relative state.
-- `UpToDate` calculated only for ongoing works whose selected track is current and verified.
-- **Manual Track Mode** with:
-  - No inferred availability.
-  - No Up to Date calculation.
-  - No pressure-based language.
-  - Explicit confirmation before switching to an incompatible automated numbering system.
-- **Quick Start Onboarding** with:
-  - Planned.
-  - In Progress.
-  - Completed.
-- Only Quick Start entries marked In Progress populate Continue.
-- **Dashboard Continue** ordered by:
-  1. Verified new-content availability.
-  2. Recent activity.
-- Context-aware `+1` behavior:
-  - Anime advances only to a known next episode.
-  - Reading advances only to a known next chapter.
-  - Detailed editing opens when Shiori cannot safely determine the next unit.
-- **Progress Vault** undo for the most recent update on a specific work.
-- English and Spanish localization support for:
-  - User-facing API errors.
-  - Reference-client flows.
-- Theme behavior verified in the client workstream.
-- End-to-end tests for:
-  - Release-track selection.
-  - Up to Date calculation.
-  - Manual Track behavior.
-  - Continue ordering.
-  - Context-aware quick updates.
-  - Undo.
+### Integration contracts
 
-### Exit Criteria
+Introduce the versioned integration envelope with:
 
-All Phase 1 user flows are functionally complete through the Gateway.
+- event ID
+- event type
+- event version
+- aggregate ID
+- aggregate version
+- occurrence time
+- correlation metadata
+- causation metadata when available
 
-Release Intelligence never invents missing availability, Manual Track works without data loss, Continue uses deterministic ordering and update rules, and the latest update for each work can be undone safely.
+Formal compatibility rules apply to these contracts.
+
+### Catalog Outbox
+
+From the first Catalog operation that emits an integration fact, persistence uses a Transactional Outbox.
+
+The publisher uses:
+
+- RabbitMQ publisher confirms
+- durable exchanges/queues
+- retries
+- dead-letter handling
+- message versioning
+
+### Catalog lifecycle events
+
+Publish the projection-relevant lifecycle:
+
+```text
+CatalogItemCreated
+CatalogItemUpdated
+CatalogItemRetired
+
+PublicationUnitCreated
+PublicationUnitUpdated
+PublicationUnitRetired
+```
+
+Producer contract tests and operational metrics cover:
+
+- Outbox age
+- failed publications
+- queue depth
+- DLQ count
+- provider sync health
+
+## Exit criteria
+
+A user can browse/search the cached Catalog through YARP.
+
+Catalog changes that matter to downstream services create durable Outbox records and are eventually published without relying on best-effort in-memory delivery.
+
+Search and discovery APIs are documented, contract-tested, and verified through a reference client.
 
 ---
-## Milestone 5B: Launch Readiness (MVP)
 
-This milestone verifies and operationalizes the quality work introduced throughout the roadmap. It does not introduce testing, security, or observability for the first time.
+# Milestone 3 — Core Tracking & Projections
 
-### Deliverables
+This is the point where Catalog and Tracking begin communicating through the real asynchronous path.
 
-- Automated deployment to a production-like staging environment.
-- Deployment-time database migration execution and verification.
-- End-to-end smoke tests after every staging deployment.
-- Final security review covering:
-  - Authentication.
-  - Authorization.
-  - File upload.
-  - XML parsing.
-  - Secret handling.
-  - Rate limiting.
-  - Dependency vulnerabilities.
-- Load and resilience testing for:
-  - Catalog reads.
-  - Progress writes.
-  - Concurrent imports.
-  - Provider outages.
-  - RabbitMQ redelivery.
-  - Consumer backlog recovery.
-- Backup and restore verification for:
-  - Identity PostgreSQL.
-  - Catalog MongoDB.
-  - Tracking PostgreSQL.
-- Operational dashboards and alerts for:
-  - Service availability.
-  - API latency.
-  - Error rates.
-  - Database health.
-  - Provider failures.
-  - Queue depth.
-  - Outbox age.
-  - Inbox failures.
-  - Import job failures.
-- Runbooks for:
-  - Failed deployments.
-  - Stuck imports.
-  - Poison messages.
-  - Projection rebuilds.
-  - Signing-key rotation.
-  - Database restoration.
-  - Rollback or forward-fix procedures.
-- Final compatibility verification against approved:
-  - OpenAPI contracts.
-  - Integration-event contracts.
-- A documented MVP release checklist with named pass/fail evidence for every Phase 1 feature.
+Tracking is built around local PostgreSQL state and Catalog projections rather than request-time Catalog calls.
 
-### Exit Criteria
+## Deliverables
 
-Every Phase 1 feature in `FEATURES.md` is implemented, deployed to staging, tested end to end, observable, recoverable, and supported by an operational runbook.
+### Tracking persistence
 
-A clean environment can be deployed automatically, all migrations succeed, smoke tests pass, backups can be restored, and no unresolved critical security or data-integrity issue remains.
+Tracking uses PostgreSQL with:
 
-This milestone is the MVP launch gate.
+- `tracking_entries`
+- `audiovisual_progress`
+- `reading_progress`
+
+Create explicit migrations for:
+
+- tables
+- constraints
+- indexes
+- triggers
+
+The source roadmap currently specifies:
+
+```text
+progress_history
+-> populated through database triggers
+```
+
+so a supported write path cannot skip history capture.
+
+This wording is preserved here because it exists in the source roadmap. Any later architecture decision that changes the allowed capture mechanism should be synchronized separately rather than silently rewritten during editorial cleanup.
+
+### Local Catalog projections
+
+Tracking maintains:
+
+- `catalog_item_registry`
+- `catalog_unit_registry`
+
+including the Release Track subset needed locally.
+
+### Inbox / Outbox
+
+Tracking consumes Catalog events through an idempotent Inbox.
+
+Tracking also has its own Transactional Outbox for Tracking-owned integration facts.
+
+Consume the full Catalog lifecycle:
+
+```text
+CatalogItemCreated
+CatalogItemUpdated
+CatalogItemRetired
+
+PublicationUnitCreated
+PublicationUnitUpdated
+PublicationUnitRetired
+```
+
+Aggregate-version checks prevent stale/out-of-order messages from moving the projection backward.
+
+### Projection-lag behavior
+
+Support:
+
+- speculative insert for the narrow “just discovered, immediately saved” race
+- background reconciliation of genuine orphan/pending records
+
+### Polymorphic Tracking
+
+Audiovisual:
+
+- episode
+- playback position
+
+Reading:
+
+- volume
+- chapter
+- page
+- fractional chapters
+- extras
+- one-shots
+- specials
+- named labels
+
+### Library state
+
+User-controlled statuses:
+
+```text
+Planned
+InProgress
+Paused
+Completed
+Dropped
+```
+
+Store:
+
+- selected release-track preference
+- Manual Track selection
+
+`UpToDate` is intentionally not calculated yet.
+
+### Library and profile-related features
+
+Complete the approved Tracking foundation for:
+
+- list privacy
+- shareable-profile integration
+- watchlists/read-lists
+- consumption dates
+- scoring
+- core statistics
+
+The public-library API exposes only explicitly public Tracking data and composes safely with Identity-owned profile policy.
+
+### Concurrency and idempotency
+
+Tracking mutations use:
+
+- ETag
+- `If-Match`
+- revision column
+- Idempotency-Key where applicable
+
+Large collections/history use cursor pagination.
+
+### Tests
+
+Cover at least:
+
+- duplicate events
+- out-of-order events
+- projection lag
+- speculative inserts
+- concurrent progress updates
+- idempotent retries
+- orphan reconciliation
+- trigger-based history capture according to this source roadmap
+
+## Exit criteria
+
+A user can:
+
+- search Catalog
+- add a work to the Library
+- choose a Library Status
+- track granular progress
+
+through YARP.
+
+Catalog and Tracking converge through durable asynchronous events.
+
+Duplicate/out-of-order deliveries are safe.
+
+No synchronous Catalog call exists in the progress-write path.
+
+Release-relative `UpToDate` remains intentionally absent.
 
 ---
-## Future Horizons (Phase 2)
 
-Once Shiori launches, the following features extend it further. They are described in full in `FEATURES.md`; this section is a pointer, not an implementation plan.
+# Milestone 4 — Import Engine & Data Portability
+
+Import comes after Identity, Catalog, and Tracking because it depends on all three foundations:
+
+- account ownership
+- canonical Catalog matching
+- local Catalog projections
+- durable Tracking persistence
+- reliable background processing
+
+## Deliverables
+
+### Import job lifecycle
+
+The durable lifecycle is:
+
+```text
+Pending
+Validating
+Processing
+AwaitingConfirmation
+Committing
+Completed
+PartiallyCompleted
+Failed
+Cancelled
+```
+
+### Staging and file handling
+
+Tracking owns staging tables for parsed import entries.
+
+Uploaded files use secure temporary storage with:
+
+- ownership checks
+- file-size limits
+- retention/cleanup
+- XML parser hardening
+
+Gateway and Tracking enforce endpoint-specific request limits.
+
+### Parsers
+
+Versioned parsers use representative fixtures for:
+
+- MyAnimeList
+- AniList-compatible exports
+
+### Matching and hydration
+
+Tracking first matches against:
+
+```text
+catalog_item_registry
+```
+
+Unknown identifiers are sent to Catalog through RabbitMQ in bounded hydration requests.
+
+Catalog remains the only service that can call AniList/MangaDex.
+
+Hydration commands/results need:
+
+- correlation
+- timeouts
+- retries
+- duplicate protection
+- partial-failure reporting
+
+### Preview
+
+Preview shows:
+
+- matched records
+- unmatched records
+- ambiguous records
+- invalid progress
+- proposed conflict resolutions
+
+Bulk resolution may support actions such as:
+
+> apply to all compatible remaining entries
+
+### Durable processing
+
+Import processing is resumable/idempotent.
+
+Worker restart should not force a successfully staged job back to zero.
+
+After confirmation:
+
+- commit in bounded idempotent batches
+- persist checkpoints
+- finalize atomically after all expected batches finish
+
+Emit one summary:
+
+```text
+UserLibraryImportCompleted
+```
+
+per completed import rather than one event per imported row.
+
+### Export
+
+Data Portability includes:
+
+- MyAnimeList-compatible current-state export
+- complete Shiori archive export
+
+### Load tests
+
+Exercise:
+
+- large files
+- retries
+- hydration backlog
+- concurrent jobs
+- worker restarts
+- partial failures
+
+## Exit criteria
+
+A user can:
+
+```text
+upload
+-> leave while processing continues
+-> return
+-> review preview
+-> resolve conflicts
+-> confirm
+-> monitor commit
+-> finish with library/progress matching the confirmed preview
+```
+
+Retries do not create duplicates.
+
+Partial failures remain visible/recoverable.
+
+Users can export both portable current state and a complete Shiori archive.
+
+---
+
+# Milestone 5A — Intelligence & Final User Flows
+
+This milestone activates the product behavior that depends on release metadata, progress history, and the Tracking foundation already built.
+
+## Deliverables
+
+### Release Intelligence
+
+Calculate release-relative state only from verified/supported data.
+
+Each tracked work has one active selected release track.
+
+Keep these concepts separate:
+
+```text
+Library Status
+!=
+release-relative state
+```
+
+`UpToDate` applies only when:
+
+- the work is ongoing
+- the selected track is supported
+- the track is current/verified
+
+### Manual Track
+
+Manual Track provides:
+
+- no inferred availability
+- no `UpToDate`
+- no pressure-based language
+- explicit confirmation before switching to an incompatible automated numbering system
+
+### Quick Start
+
+Onboarding supports:
+
+- Planned
+- In Progress
+- Completed
+
+Only Quick Start items marked `InProgress` appear in Continue.
+
+### Continue
+
+Continue ordering:
+
+1. verified new-content availability
+2. recent Tracking activity
+
+### Context-aware `+1`
+
+Anime advances only when a known next episode exists.
+
+Reading advances only when a known next chapter exists.
+
+If Shiori cannot determine the next unit safely, the detailed editor opens instead of guessing.
+
+### Progress Vault
+
+Undo the most recent progress update for one work.
+
+### Localization
+
+Verify English and Spanish for:
+
+- user-facing API errors
+- reference-client flows
+
+Theme behavior is verified in the client workstream.
+
+### E2E coverage
+
+Cover:
+
+- release-track selection
+- `UpToDate`
+- Manual Track
+- Continue ordering
+- context-aware quick update
+- Undo
+
+## Exit criteria
+
+All Phase 1 user flows work through the Gateway.
+
+Release Intelligence does not invent availability.
+
+Manual Track preserves progress safely.
+
+Continue ordering and quick updates are deterministic.
+
+The latest progress update for a work can be undone safely.
+
+---
+
+# Milestone 5B — Launch Readiness
+
+This milestone does not introduce testing/security/observability for the first time.
+
+It proves that the quality work built throughout the roadmap actually holds in a production-like environment.
+
+## Deliverables
+
+### Deployment
+
+- automated deployment to production-like staging
+- deployment-time migration execution/verification
+- post-deploy smoke tests
+
+### Security review
+
+Cover:
+
+- authentication
+- authorization
+- file upload
+- XML parsing
+- secret handling
+- rate limiting
+- dependency vulnerabilities
+
+### Load and resilience
+
+Exercise:
+
+- Catalog reads
+- progress writes
+- concurrent imports
+- provider outages
+- RabbitMQ redelivery
+- consumer backlog recovery
+
+### Backup and restore
+
+Verify:
+
+- Identity PostgreSQL
+- Catalog MongoDB
+- Tracking PostgreSQL
+
+### Operational visibility
+
+Dashboards/alerts for:
+
+- service availability
+- API latency
+- error rates
+- database health
+- provider failures
+- queue depth
+- Outbox age
+- Inbox failures
+- import failures
+
+### Runbooks
+
+Document recovery for:
+
+- failed deployment
+- stuck import
+- poison message
+- projection rebuild
+- signing-key rotation
+- database restore
+- rollback / forward-fix
+
+### Final contract verification
+
+Verify:
+
+- OpenAPI compatibility
+- integration-event compatibility
+
+Create an MVP release checklist with concrete pass/fail evidence for every Phase 1 feature.
+
+## Exit criteria
+
+Every Phase 1 feature in `FEATURES.md` is:
+
+- implemented
+- deployed to staging
+- tested end to end
+- observable
+- recoverable
+- backed by an operational runbook where applicable
+
+A clean environment can be deployed automatically.
+
+Migrations succeed.
+
+Smoke tests pass.
+
+Backups restore successfully.
+
+No unresolved critical security or data-integrity issue remains.
+
+**This is the MVP launch gate.**
+
+---
+
+# Future Horizons — Phase 2
+
+The source roadmap points to the following future capabilities:
 
 - Franchise Autopilot
 - Interactive Franchise Tree
@@ -489,19 +906,76 @@ Once Shiori launches, the following features extend it further. They are describ
 - Full Cast Directory
 - Per-Work Discussion
 
+This section is only a pointer to future scope.
+
+It is not an implementation plan and does not justify creating Phase 2 services, tables, queues, or endpoints during the MVP.
+
+If later product documents reclassify any of these items, the roadmap should be synchronized explicitly rather than relying on this older list.
+
 ---
 
-The milestones above are dependency and integration gates, not a prohibition against parallel work.
+# Parallel work and reordering
 
-Teams may begin later work early when its contracts and prerequisites are stable. For example, an import parser can be developed against fixtures while Catalog work continues.
+The milestones describe dependency/integration gates, not a rule that only one person or workstream can touch one milestone at a time.
 
-However, a milestone cannot be declared complete until its stated dependencies and exit criteria have been verified.
+Work may begin early when its prerequisites are stable.
 
-Any proposed reordering must include an explicit dependency review covering:
+For example:
 
-- Data contracts.
-- Database migrations.
-- Message flows.
-- Security.
-- Testing.
-- Operational readiness.
+```text
+Import parser
+-> can be developed against fixtures
+-> while Catalog work continues
+```
+
+But a milestone cannot be marked complete until its dependencies and exit criteria are actually verified.
+
+If a milestone is reordered, review the impact on:
+
+- data contracts
+- migrations
+- message flows
+- security
+- testing
+- operational readiness
+
+The important thing is not obeying milestone numbers mechanically.
+
+It is preserving the dependency assumptions that make each milestone safe to complete.
+
+---
+
+# Roadmap summary
+
+```text
+Milestone 1
+Foundation + Identity
+        |
+        v
+Milestone 2A
+Canonical Catalog + providers
+        |
+        v
+Milestone 2B
+Discovery + reliable messaging
+        |
+        v
+Milestone 3
+Tracking + Catalog projections
+        |
+        v
+Milestone 4
+Import + portability
+        |
+        v
+Milestone 5A
+Release Intelligence + final flows
+        |
+        v
+Milestone 5B
+Launch verification
+```
+
+The roadmap is intentionally dependency-first.
+
+Shiori should reach each milestone with something demonstrably more complete, while avoiding the temptation to build future infrastructure before the underlying product capability actually needs it.

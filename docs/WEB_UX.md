@@ -2,271 +2,223 @@
 
 **Status:** Consolidated Draft — STEP 9 final approval pending  
 **Last updated:** 2026-08-09  
-**Scope:** Canonical backend-facing UX and read-model requirements for Shiori clients. This document defines what user-facing experiences need from the backend without defining visual design, frontend framework, branding, or pixel-level layout.
-
-## Related Documents
-
-- `FEATURES.md` — approved product behavior and Phase 1 scope.
-- `ROADMAP.md` — implementation sequencing and milestone dependencies.
-- `ADR.md` — accepted service boundaries, data ownership, privacy architecture, and client/API principles.
-- `SYSTEM_DESIGN.md` — runtime topology, local projections, communication paths, and degraded modes.
-- `API_CONVENTIONS.md` — public HTTP rules, cursor pagination, search semantics, concurrency, idempotency, compatibility, and durable jobs.
-- `EVENT_CONTRACTS.md` — asynchronous integration semantics and Catalog-to-Tracking projection contracts.
-- `NON_FUNCTIONAL_REQUIREMENTS.md` — latency, availability, degradation, capacity, resilience, and operational behavior.
-- `PRODUCT_HORIZON.md` — approved future direction and MVP candidates.
-- `FUTURE_STRESS_TEST.md` — future-compatibility constraints and architecture preconditions.
+**Scope:** Backend-facing requirements for the main Shiori screens and flows.
 
 ---
 
-## Document Map
+## Why this document exists
 
-1. Purpose & Scope
-2. Cross-Cutting Principles
-3. Home / Continue — STEP 9.1
-4. Search / Discovery — STEP 9.2
-5. Catalog Item Detail — STEP 9.2
-6. My Library — STEP 9.3
-7. Detailed Progress Editor & Concurrency — STEP 9.3
-8. Progress Vault / Undo — STEP 9.3
-9. Public Profile — STEP 9.4
-10. Settings — STEP 9.4
-11. Smart Staging Import — STEP 9.5
-12. Cross-Screen Backend States — STEP 9.6
-13. HTTP Caching & Compression
-14. Mobile-First API Requirements — STEP 9.6
-15. Phase 2 PWA Compatibility
-16. Cross-Screen Guardrails
-17. Performance Mapping
-18. Decisions Intentionally Deferred
-19. Final Architecture / UX Invariants
-20. STEP 9 Completion Gate
-21. Source Basis
+This is not a visual-design document.
+
+Its job is to work backward from the user experience and make sure the backend exposes the right data and behavior without forcing the frontend to:
+
+- make one request per card
+- reconstruct domain rules locally
+- guess privacy or progress state
+- depend on live external providers
+- download entire collections
+- hide backend failures as fake empty states
+
+The basic design rule is:
+
+> **Optimize the read model for the actual user flow, but keep service ownership and business rules in the backend.**
+
+Shiori should feel like one product even though Identity, Catalog, and Tracking remain separate bounded contexts.
 
 ---
 
-## 1. Purpose & Scope
+# 1. Cross-cutting UX/backend principles
 
-`WEB_UX.md` is not a visual design specification.
+## 1.1 Avoid N+1 service calls
 
-Its purpose is to translate approved product behavior into concrete client data requirements so Shiori's backend can serve real user experiences without excessive request fan-out, N+1 request patterns, accidental service coupling, UI-driven domain redesign, or client-side reimplementation of backend business rules.
+A screen should not need one backend request per rendered row or card.
 
-The document works from the user-facing surface back toward the architecture:
+When the UI needs related data for several items, Shiori should prefer one of these:
 
-```text
-User experience
-      |
-      v
-Screen / flow
-      |
-      v
-Required data
-      |
-      v
-Owning bounded context
-      |
-      v
-Public API / read model
-      |
-      v
-Existing architecture
-```
+- a bounded read model
+- a batch read
+- an already-approved local projection
+- a small bounded composition
 
-A screen may combine information from more than one bounded context, but that does not transfer ownership between services.
-
-The governing rule is:
-
-> **Optimize reads for the user experience without weakening service ownership, privacy, consistency, or failure-isolation guarantees.**
-
-This document intentionally does not define:
-
-- Colors, typography, spacing, animation, branding, or pixel-level layout.
-- React, Next.js, TypeScript, Tailwind, or any other frontend framework.
-- UI component libraries.
-- A final visual navigation system.
-- Speculative Phase 2 infrastructure.
-- WebSockets for Smart Staging Import.
+The number of requests should not grow linearly with the number of visible items.
 
 ---
 
-## 2. Cross-Cutting Principles
+## 1.2 Read optimization does not change ownership
 
-### No N+1 Service Fan-Out
-
-A user-facing screen must not require one backend request per rendered card or list item. When multiple records require related data, Shiori prefers a purpose-built bounded read model, a bounded batch read, an already-approved local projection, or a bounded composition that preserves ownership.
-
-### Read Optimization Does Not Transfer Ownership
+Ownership remains:
 
 ```text
 Identity
-  -> user identity, authentication, profile visibility
+    -> authentication
+    -> Shiori user identity
+    -> public profile identity
+    -> profile-level visibility
 
 Catalog
-  -> canonical work metadata, franchises, publication units,
-     relationships, release metadata
+    -> works
+    -> franchises
+    -> relationships
+    -> publication/release metadata
+    -> official links
+    -> characters
 
 Tracking
-  -> user library relationship, progress, history, ratings,
-     release-track preference, local Catalog projections
+    -> library relationship
+    -> progress/history
+    -> ratings
+    -> lists/privacy
+    -> release-track preference
+    -> local Catalog projections
 ```
 
-A local Catalog projection inside Tracking is a consumer-owned copy used to execute Tracking-owned rules. It is not a second Catalog source of truth.
-
-### No Live Provider Dependency in Normal Reads
-
-Normal Catalog Search and Catalog Item reads are served from Shiori-owned Catalog state. They must not require a live AniList or MangaDex request. Tracking critical paths use the already-approved local Catalog projection where foreign Catalog facts are required.
-
-### Universal Data and User-Specific Data Remain Distinct
-
-```text
-Universal / public data
-    -> same Catalog fact for many users
-    -> cache-friendly when safe
-
-User-specific data
-    -> depends on authenticated UserId
-    -> contains library/progress/settings state
-    -> must not be treated as universal shared-cache content
-```
-
-### Public APIs Remain Platform-Neutral
-
-The same backend contracts must remain usable by Web, PWA, and future native clients. Endpoints must model product resources and use cases rather than one frontend component tree.
-
-### Large Collections Are Bounded
-
-Potentially unbounded collections use cursor pagination or another explicitly approved bounded contract. A client must never depend on `GET everything`.
-
-### Authoritative Backend State Must Be Explicit
-
-The client must not guess next progress units, Undo targets, revision state, privacy eligibility, release-track ownership, durable Import state, or other backend-owned business facts.
+A local projection in Tracking exists so Tracking can make Tracking-owned decisions quickly. It is not a second Catalog source of truth.
 
 ---
 
-## 3. Home / Continue — STEP 9.1
+## 1.3 Normal reads do not depend on live providers
 
-### 4.1 Product Purpose
+Normal Catalog Search and Catalog Item reads use Shiori-owned MongoDB state.
 
-`Continue` is the primary tracking surface on the authenticated Home experience.
+Tracking critical paths use Tracking's local Catalog projection.
+
+AniList and MangaDex stay out of ordinary user-facing read/write latency.
+
+---
+
+## 1.4 Universal data and personal data stay separate
+
+```text
+Catalog metadata
+    -> mostly universal
+    -> cache-friendly when safe
+
+Tracking state
+    -> user-specific
+    -> authorization-sensitive
+    -> never treated as universal shared-cache content
+```
+
+A page can show both without merging their ownership.
+
+---
+
+## 1.5 Collections are bounded
+
+Large collections do not use “GET everything.”
+
+Cursor pagination, batch reads, or another explicit bounded contract should be used where the result set can grow significantly.
+
+---
+
+## 1.6 The backend owns authoritative state
+
+The frontend should not guess:
+
+- next reading unit
+- Undo target
+- revision state
+- profile eligibility
+- release-track behavior
+- durable import status
+- whether a user is “up to date”
+
+The server should expose enough state for the client to render the correct experience.
+
+---
+
+# 2. Home / Continue
+
+`Continue` is the main authenticated tracking surface.
 
 It answers:
 
-> **What am I currently watching or reading, where am I, and is verified new content available on my selected release track?**
+> **What am I currently watching or reading, where did I leave off, and is verified new content available on the release track I follow?**
 
-The approved product behavior is:
+Only `InProgress` items appear.
 
-- Only works with Library Status `InProgress` appear in Continue.
-- Works with verified newly available content on the user's selected automated release track are prioritized.
-- Remaining works are ordered by recent activity.
-- Manual Track items remain in Continue but do not use automated release availability for ordering.
-- Each item supports a context-aware `[+1]` action when Shiori can determine the next valid unit safely.
-- If Shiori cannot determine the next valid unit, the client opens the detailed progress editor rather than guessing.
+Items with verified newly available content on the user's selected automated release track are prioritized. Remaining items are ordered by recent Tracking activity.
+
+Manual Track items still appear, but Shiori does not invent automated release availability for them.
 
 ---
 
-### 4.2 Primary Backend Owner
+## 2.1 Owner
 
 **Primary owner:** Tracking
 
-Continue is not a Catalog query decorated with user progress.
+Continue is fundamentally a Tracking query because its ordering and behavior depend on:
 
-It is a Tracking read because its core semantics are determined by:
+- Library Status
+- current progress
+- selected release track
+- Manual Track
+- recent Tracking activity
+- release-relative evaluation
+- quick-update capability
 
-- User ownership.
-- Library Status.
-- Current progress.
-- Selected release track.
-- Manual Track state.
-- Recent Tracking activity.
-- Release-relative evaluation.
-- Quick-update capability.
-
-Catalog remains authoritative for Catalog facts, but Tracking already maintains the local Catalog projections required for latency-sensitive Tracking behavior.
+Catalog still owns Catalog facts, but Tracking already has the local projection needed for this kind of latency-sensitive decision.
 
 ---
 
-### 4.3 Continue Is a Tracking-Local Composite Read
-
-Continue requires a **composite read inside the Tracking bounded context**.
-
-The read combines:
-
-```text
-Tracking-owned current state
-+
-Tracking-owned local Catalog projection
-```
+## 2.2 Continue is a local Tracking composite
 
 Conceptually:
 
 ```mermaid
 flowchart LR
-    Client["Authenticated Client"]
-
-    Gateway["YARP Gateway"]
-
+    Client["Client"]
+    Gateway["YARP"]
     Tracking["Tracking API"]
-
-    TrackingState[("Tracking PostgreSQL<br/>tracking_entries + progress")]
-
-    CatalogProjection[("Tracking PostgreSQL<br/>catalog_item_registry<br/>catalog_unit_registry")]
+    State[("Tracking PostgreSQL<br/>current Tracking state")]
+    Projection[("Tracking PostgreSQL<br/>local Catalog projection")]
 
     Client --> Gateway
     Gateway --> Tracking
-
-    Tracking --> TrackingState
-    Tracking --> CatalogProjection
-
-    TrackingState --> Tracking
-    CatalogProjection --> Tracking
-
+    Tracking --> State
+    Tracking --> Projection
     Tracking --> Gateway
     Gateway --> Client
 ```
 
-This is intentionally different from:
+The normal Continue request should not do:
 
 ```text
-Tracking API
-    |
-    +---- synchronous HTTP ----> Catalog API
+Tracking
+    -> HTTP Catalog
+        -> MongoDB
 ```
 
-for every Continue read.
+for every row.
 
-The Continue read must not synchronously call Catalog to determine whether a user has verified new content available.
-
-That decision is made from Tracking's local Catalog projection.
+Release-relative state is evaluated locally inside Tracking.
 
 ---
 
-### 4.4 Required Continue Read Semantics
+## 2.3 Continue item semantics
 
-The Continue read model must provide enough information for the client to understand each in-progress Tracking relationship without issuing one request per item.
+Each item needs enough data for the client to render the state without another Tracking request.
 
-At minimum, each Continue item requires the following semantic information:
+At minimum, the read model needs to represent concepts such as:
 
-```text
-Tracking identity
-Catalog item identity
-Progress family / media capability
-Current recorded progress
-Current Library Status
-Selected release-track state
-Manual Track state when applicable
-Whether verified new content is available
-Recent Tracking activity used by Continue ordering
-Whether a quick +1 action is currently available
-```
+- `TrackingItemId`
+- `CatalogItemId`
+- progress family
+- current progress
+- Library Status
+- selected release track
+- Manual Track state
+- verified-new-content state
+- recent activity
+- whether a quick update is currently safe
 
-The exact final serialized DTO belongs to the endpoint's OpenAPI contract.
-
-This document defines the required semantics, not the final property names.
+The final JSON property names belong to the endpoint/OpenAPI contract.
 
 ---
 
-### 4.5 Current Progress Representation
+## 2.4 Progress remains polymorphic
 
-Continue must preserve Shiori's polymorphic progress model.
+Audiovisual and reading progress are not forced into one generic number.
 
 Conceptually:
 
@@ -281,101 +233,61 @@ Reading
     page
 ```
 
-The read model must not flatten every progress family into a single numeric field.
-
-Reading progress must continue to support irregular chapter labels such as:
+Reading labels remain capable of values such as:
 
 ```text
-0
 10.5
 Extra
 Special
 One-shot
-named interlude
 ```
 
-The client must display the progress returned by Tracking without assuming that every chapter is an integer.
+The client displays what Tracking returns instead of assuming chapter numbers are integers.
 
 ---
 
-### 4.6 Verified New-Content State
+## 2.5 Verified new-content state
 
-Continue may prioritize an item because verified content is available beyond the user's current recorded progress.
-
-That state is derived inside Tracking from:
+Tracking derives this from:
 
 ```text
-user current progress
-+
-selected release track
-+
-Tracking local Catalog projection
-```
-
-Conceptually:
-
-```mermaid
-flowchart TD
-    Progress["Current Tracking Progress"]
-
-    Track["Selected Release Track"]
-
-    Projection["Local Catalog Projection<br/>verified latest known unit"]
-
-    Evaluate["Tracking Release Evaluation"]
-
-    NewContent{"Verified new content<br/>available?"}
-
-    Progress --> Evaluate
-    Track --> Evaluate
-    Projection --> Evaluate
-    Evaluate --> NewContent
+current progress
++ selected release track
++ local Catalog release projection
 ```
 
 Rules:
 
-1. Tracking must not query Catalog synchronously for this evaluation.
-2. Tracking must not query AniList or MangaDex directly.
-3. Only verified structured release data may produce a positive new-content result.
-4. Manual Track Mode does not fabricate automated availability.
-5. Projection lag may temporarily make the release comparison stale; that is an eventual-consistency condition, not permission to invent newer data.
+- no synchronous Catalog call
+- no AniList/MangaDex call
+- only verified structured release data may produce a positive result
+- Manual Track does not fabricate automated release availability
+- projection lag may temporarily make the comparison stale
+
+That final point is an eventual-consistency limitation, not permission to guess.
 
 ---
 
-### 4.7 Continue Ordering
+## 2.6 Continue ordering
 
-The approved ordering semantics are:
+The server applies the ordering:
 
 ```text
-1. InProgress works with verified new content available
-2. Remaining InProgress works by recent Tracking activity
+1. InProgress with verified new content
+2. remaining InProgress by recent Tracking activity
 ```
 
-Manual Track items participate through recent activity because automated release-relative state is intentionally unavailable for them.
+Manual Track entries participate through recent activity.
 
-The exact database index/query implementation belongs to Tracking implementation design.
-
-The client must not reproduce the business ordering itself by downloading a large unsorted list and attempting to reimplement server rules.
+The client does not download a large list and reimplement this business rule itself.
 
 ---
 
----
+# 3. Quick `[+1]`
 
-### Quick `[+1]` Update Capability
+Quick update is a Tracking mutation, not a client-side counter.
 
-#### 5.1 Purpose
-
-Continue supports a fast progress mutation without requiring the user to open the full work page.
-
-The client must not decide on its own that `+1` is safe merely because a work is in progress.
-
-The server must communicate whether the quick action is currently available.
-
----
-
-#### 5.2 Server-Declared Quick-Action Capability
-
-Each Continue item must expose a server-derived quick-action capability.
+The server needs to tell the client whether a quick update is currently safe.
 
 Conceptually:
 
@@ -388,371 +300,178 @@ Conceptually:
 }
 ```
 
-This JSON is illustrative, not a frozen OpenAPI schema.
-
-The semantic contract is:
-
-```text
-available = true
-```
-
-means:
-
-> Tracking has enough authoritative/local projected information to perform the approved context-aware quick advancement safely.
-
-```text
-available = false
-```
-
-means:
-
-> The client must not guess the next progress unit and should route the user to detailed progress editing when they choose to update progress.
+This is illustrative rather than a frozen schema.
 
 ---
 
-#### 5.3 Anime `[+1]`
+## 3.1 Audiovisual quick update
 
-For audiovisual progress:
+Typical behavior:
 
 ```text
-Current:
 Episode N
-Playback position = X
-
-Quick +1:
-Episode N + 1
-Playback position = 0
+-> Episode N + 1
+playback position -> 0
 ```
 
-The quick action is only valid when the next episode transition is allowed by the Tracking rules.
+but only when Tracking considers the transition valid.
 
-The client must not perform arithmetic locally and then submit an assumed episode value as if it were authoritative quick-update behavior.
+The client should not assume `N + 1` is always legal.
 
 ---
 
-#### 5.4 Reading `[+1]`
+## 3.2 Reading quick update
 
-For Manga, Manhwa, and Light Novels:
-
-```text
-Current:
-Known publication unit A
-
-Quick +1:
-Next known valid publication unit B
-Page position resets
-```
-
-The next known unit may not be numerically expressible as:
-
-```text
-current chapter + 1
-```
-
-because valid sequences may include:
+Reading is more important because the next unit may be:
 
 ```text
 10
 10.5
 Extra
 11
-Special
 ```
 
-Therefore the quick action depends on the Tracking local publication-unit projection.
+So the client must never implement:
 
-If Tracking does not know the next valid unit:
+```text
+nextChapter = currentChapter + 1
+```
+
+as the general rule.
+
+Tracking uses the local publication-unit projection.
+
+If the next valid unit cannot be determined safely:
 
 ```text
 quickUpdate.available = false
 ```
 
-conceptually, and the client opens detailed progress editing instead of guessing.
+and the client opens the detailed progress editor.
 
 ---
 
-#### 5.5 Quick Mutation Reliability
+## 3.3 Mutation guarantees still apply
 
-`Quick +1` is a normal Tracking mutation and inherits the existing mutation guarantees:
+Quick update inherits the same guarantees as any Tracking mutation:
 
-- Optimistic concurrency.
-- ETag / `If-Match` where required by the final endpoint contract.
-- Idempotency-Key support for retry-safe mutations.
-- Atomic current-state/history behavior.
-- Tracking Outbox behavior where an integration fact is required.
-
-The UX must not implement `[+1]` as a fire-and-forget client-side counter.
+- optimistic concurrency
+- ETag / `If-Match` when required
+- Idempotency-Key where appropriate
+- atomic current-state/history behavior
+- Outbox behavior where a real integration fact exists
 
 ---
 
-#### 5.6 Continue and Catalog Presentation Metadata
+## 3.4 Presentation metadata
 
-The Continue read is optimized around Tracking-owned behavior and local Tracking projections.
+Continue may need Catalog-owned presentation data such as title or artwork.
 
-Existing architecture also establishes that presentation-heavy Catalog data such as full titles, images, and general media metadata remains Catalog-owned and should not be duplicated indiscriminately into Tracking responses.
+The rule is:
 
-Therefore this document establishes the following guardrail:
+> **Do not solve that by creating one Catalog request per Continue item.**
 
-> **Continue must not create one Catalog request per Tracking item.**
+If the final card needs fields outside Tracking's approved projection, use a bounded Catalog batch read or explicitly expand the compact projection.
 
-If the final Continue card requires Catalog-owned presentation fields that are not part of the approved Tracking projection, the solution must use a bounded mechanism such as a Catalog batch read or an explicitly approved projection extension.
-
-This document does not silently expand `catalog_item_registry` with presentation-heavy fields and does not define the final card metadata set.
-
-That decision must remain explicit before the final STEP 9 completion gate.
+This document does not silently turn Tracking into a full Catalog replica.
 
 ---
 
-#### 5.7 Continue Pagination / Boundaries
+# 4. Search / Discovery
 
-This document does **not** invent a pagination rule, maximum row length, or hard item limit for Continue.
+Global Search is work-focused.
 
-The current product specification describes Continue as the surface for all works currently `InProgress`.
+It searches Catalog items such as:
 
-If a bounded/paginated behavior is needed for the final UX, it must be decided explicitly rather than inferred here.
+- Anime
+- Manga
+- Manhwa
+- Light Novels
+- Movies
+- other supported work types
+
+It does not search users.
+
+Shareable profiles and future connections do not change the global search domain.
 
 ---
 
----
+# 5. Autocomplete
 
-## 4. Search / Discovery — STEP 9.2
+Autocomplete is currently an **MVP Candidate**, not approved MVP scope.
 
-### 6.1 Product Purpose
+If approved, it remains a small, fast Catalog-only capability.
 
-Search / Discovery helps the user find entertainment works.
-
-The global search scope is **work-focused**.
-
-It searches Shiori Catalog content such as:
-
-- Anime.
-- Manga.
-- Manhwa.
-- Light Novels.
-- Movies or other supported Catalog media types.
-
-It does not search for users.
-
-The existence of shareable profiles or future friend/connection capabilities does not change the global search domain.
-
-Normative rule:
+It should be:
 
 ```text
-Global Search
-    -> Catalog works
-
-Global Search
-    X-> users / profiles / friends
-```
-
----
-
----
-
-### Autocomplete / Suggestions
-
-#### 7.1 Product Status
-
-Search Autocomplete is currently classified in `PRODUCT_HORIZON.md` as an **MVP Candidate**.
-
-This section defines the UX/data shape required if the capability is approved.
-
-It does not, by itself, promote Autocomplete into the approved MVP.
-
----
-
-#### 7.2 Autocomplete Has Different Semantics From Full Search
-
-Autocomplete is not a smaller page of Full Search results.
-
-Its purpose is rapid title discovery while the user is typing.
-
-The expected interaction is:
-
-```text
-s
-so
-sol
-solo
-```
-
-with compact suggestions that help the user select a work quickly.
-
-Therefore Autocomplete has intentionally different backend characteristics:
-
-```text
-Small
-Fast
-Repeated frequently
-No pagination
-Cacheable
+small
+fast
+frequently called
+not paginated
+cache-friendly
 Catalog-only
-Presentation-limited
 ```
 
----
-
-#### 7.3 Autocomplete Data Requirements
-
-Autocomplete should search the same Catalog title identity space already used by discovery, including where available:
-
-- Canonical title.
-- Native title.
-- Romaji title.
-- Alternative titles.
-
-Each suggestion must remain intentionally compact.
-
-The final field list is not frozen here, but the suggestion contract should contain only information necessary to identify/select the work.
-
-Conceptually, that may include:
-
-```text
-CatalogItemId
-display title
-media type
-small identifying presentation metadata when approved
-```
-
-It must not return:
-
-- Full synopsis.
-- Full character data.
-- Complete franchise graph.
-- Full publication-unit history.
-- User Tracking state.
-- User/profile results.
+It is not simply “Full Search with a smaller page size.”
 
 ---
 
-#### 7.4 Autocomplete Is Not Paginated
+## 5.1 Data shape
 
-Autocomplete does not expose cursor pagination.
+Autocomplete should return only enough information to identify/select a work.
 
-It returns a bounded suggestion set.
+Possible semantics:
 
-This document intentionally does not invent the exact maximum number of suggestions.
+- `CatalogItemId`
+- display title
+- media type
+- small identifying presentation field if approved
 
-That value must be approved separately when the final Autocomplete endpoint contract is defined.
+It should not return:
 
----
-
-#### 7.5 Autocomplete Caching
-
-Autocomplete responses are based on universal Catalog data rather than per-user Tracking state.
-
-They are therefore cache-eligible.
-
-The exact caching mechanism, cache key, TTL, invalidation strategy, or HTTP cache header values are not defined in this document.
-
-The important UX/backend rule is:
-
-> **Autocomplete must not be treated as a personalized user-state response that defeats safe shared caching by default.**
-
-Caching must never allow stale or mixed user-specific Tracking information into the suggestion response because Tracking state does not belong in this contract.
+- full synopsis
+- full cast
+- franchise graph
+- publication history
+- Tracking state
+- users/profiles
 
 ---
 
-#### 7.6 Autocomplete Performance
+## 5.2 Performance and caching
 
-Autocomplete is expected to be extremely latency-sensitive because it may be called repeatedly while the user types.
+Autocomplete uses the indexed Catalog search path.
 
-It must use an indexed Catalog search path and must not synchronously call AniList or MangaDex.
+It never synchronously calls AniList/MangaDex.
 
-No dedicated new numeric latency SLO is invented here.
+Because the result is universal Catalog data, shared caching may be appropriate.
 
-The implementation remains subject to the accepted Catalog Fast Local Read performance requirements in `NON_FUNCTIONAL_REQUIREMENTS.md`.
-
----
+Exact TTL, suggestion count, debounce interval, and minimum query length remain implementation/product decisions.
 
 ---
 
-### Full Search
+# 6. Full Search
 
-#### 8.1 Purpose
+Full Search is the explicit browsing experience after submitting a query.
 
-Full Search is the explicit result-browsing experience after the user submits a text query or enters a full discovery flow.
+It supports:
 
-Unlike Autocomplete, Full Search supports:
+- text relevance
+- structured filters
+- approved sorting
+- cursor pagination
+- empty results
 
-- Ranked text search.
-- Structured filters.
-- Documented sorting where compatible.
-- Cursor pagination.
-- Empty-result behavior.
-- Larger result sets.
+The default ranking for a text query is search relevance unless a compatible explicit sort is requested.
+
+Filters refine the candidate set; they do not automatically become ranking signals.
 
 ---
 
-#### 8.2 Search Ranking
-
-When no explicit compatible sort is requested, text search is ordered by search relevance.
-
-Filtering refines the candidate result set.
+## 6.1 Cursor pagination
 
 Conceptually:
-
-```text
-query text
-    |
-    v
-matching works
-    |
-    v
-structured filters
-    |
-    v
-relevance ranking
-    |
-    v
-cursor-paginated result
-```
-
-A filter does not automatically become a ranking signal unless a future endpoint contract explicitly defines that behavior.
-
----
-
-#### 8.3 Search Filtering
-
-Full Search may support structured filters already aligned with Catalog discovery requirements, such as:
-
-```text
-media type
-publication / media status
-other approved Catalog discovery filters
-```
-
-Exact final filter sets belong to the endpoint's OpenAPI contract.
-
-The public API must not expose raw MongoDB query syntax or internal persistence fields.
-
----
-
-#### 8.4 Search Sorting
-
-Search relevance is the default ordering.
-
-Explicit sorting may be supported only for combinations defined by the endpoint contract.
-
-The client must not assume every sort can be combined with every ranked query/filter combination.
-
-Unsupported combinations must be rejected explicitly rather than ignored silently.
-
----
-
-#### 8.5 Cursor Pagination
-
-Full Search uses cursor pagination.
-
-Conceptually:
-
-```http
-GET /api/v1/catalog-items/search
-    ?q=solo
-    &limit=<approved-limit>
-```
-
-Response shape follows the existing collection contract:
 
 ```json
 {
@@ -762,736 +481,247 @@ Response shape follows the existing collection contract:
 }
 ```
 
-The next request reuses the opaque cursor with the same logical search context.
+The cursor is opaque and tied to the logical query that produced it.
 
-A cursor created for:
+A cursor from:
 
 ```text
 q=solo
 mediaType=manhwa
 ```
 
-must not be reused for a different search query or filter context.
-
-The final default and maximum `limit` values are not invented in this document.
+is not reused with a different query/filter context.
 
 ---
 
-#### 8.6 Empty Search Results
+## 6.2 Empty results
 
-A valid search with no matching works is a successful empty collection result.
+A valid search with zero matches returns a successful empty collection.
 
-It is not a `404 Not Found`.
-
-Conceptually:
-
-```json
-{
-  "items": [],
-  "nextCursor": null,
-  "hasMore": false
-}
-```
+It is not `404`.
 
 ---
 
-#### 8.7 Trending and Seasonal Are Separate Discovery Queries
+## 6.3 Trending and Seasonal
 
-Trending and Seasonal Discovery are not fake search terms.
+Trending and Seasonal are separate discovery semantics.
 
-The client must not request:
+The client should not fake them with:
 
 ```text
 q=trending
-```
-
-or:
-
-```text
 q=seasonal
 ```
 
-to produce those surfaces.
-
-They represent distinct Catalog discovery semantics and may receive separate endpoint contracts.
-
-This document does not define their final endpoint shapes.
+They may receive separate Catalog query contracts.
 
 ---
 
----
+# 7. Catalog Item Detail
 
-### Autocomplete vs Full Search — Required Separation
-
-| Concern | Autocomplete / Suggestions | Full Search |
-|---|---|---|
-| Primary purpose | Fast selection while typing | Browse ranked search results |
-| Owner | Catalog | Catalog |
-| User-specific Tracking data | No | No |
-| Response size | Intentionally small | Paginated |
-| Pagination | None | Cursor pagination |
-| Filtering | Minimal / not assumed here | Structured filters |
-| Sorting | Suggestion relevance | Relevance + approved explicit sorts |
-| Cache eligibility | Yes | Cache-friendly where safe, policy defined separately |
-| Provider calls | Never on normal request path | Never on normal request path |
-| User results | Never | Never |
-| Product status | MVP Candidate | MVP Approved work-focused search |
-
-The two capabilities may share underlying search infrastructure, but they must not be forced into one oversized public contract merely because both accept text.
-
----
-
----
-
-## 5. Catalog Item Detail — STEP 9.2
-
-### 10.1 Product Purpose
-
-Catalog Item Detail is the canonical work-detail experience.
-
-It allows the user to understand a work using Shiori's normalized Catalog state and, when authenticated, see or modify their own Tracking relationship to that work.
-
-The page is logically composed from two independent data domains:
+The work detail page combines two different data domains:
 
 ```text
-A. Universal Catalog Metadata
-
-B. Authenticated User Tracking State
+Universal Catalog metadata
++
+authenticated user's Tracking state
 ```
 
-Those concerns must remain distinct even when the client presents them on one screen.
+They appear together in the UI but remain separate backend concerns.
 
 ---
 
----
+## 7.1 Catalog-owned portion
 
-### Universal Catalog Metadata
+Catalog may provide:
 
-#### 11.1 Owner
+- Shiori Catalog ID
+- cover/banner
+- titles
+- synopsis
+- media type
+- publication/airing status
+- franchise relationships
+- official links
+- trailer
+- bounded main-character preview
+- release-track metadata where relevant
 
-**Owner:** Catalog
+This part is universal and cache-friendly when safe.
 
-Catalog is authoritative for the work itself.
-
-The universal metadata portion may include approved Phase 1 Catalog information such as:
-
-- Shiori Catalog Item identity.
-- Cover art.
-- Banner when available.
-- Canonical / preferred title representation.
-- Original title.
-- Alternative titles.
-- Synopsis.
-- Media type / format.
-- Publication or airing status.
-- Franchise relationships.
-- Verified official consumption links.
-- Trailer when available.
-- Bounded preview of up to 10 main characters.
-- Release-track metadata where part of the Catalog detail contract.
-
-The exact final response DTO belongs to the Catalog endpoint contract.
+Normal reads come from Shiori MongoDB, not live providers.
 
 ---
 
-#### 11.2 Catalog Metadata Is Universal
+## 7.2 Tracking-owned portion
 
-The core Catalog representation is not personalized by Tracking state.
+For an authenticated user, Tracking may provide:
 
-For the same Catalog Item revision, two users may receive the same Catalog metadata while having completely different personal progress.
+- whether the work is tracked
+- `TrackingItemId`
+- Library Status
+- current progress
+- overall rating
+- dates
+- selected release track
+- Manual Track
+- release-relative state
+- revision / ETag data
+- quick-action capability
 
-This enables the Catalog portion to remain:
+This state is private and user-specific.
+
+---
+
+## 7.3 Anonymous vs authenticated access
+
+Anonymous client:
 
 ```text
-read-heavy
-cache-friendly
-provider-independent
-universal
+GET Catalog Item
+-> Catalog metadata only
 ```
 
-Normal Catalog Item Detail reads use Shiori-owned MongoDB state and do not wait for AniList or MangaDex.
-
----
-
-#### 11.3 Catalog Metadata Cacheability
-
-Catalog Item metadata is eligible for caching because it is not user-specific Tracking state.
-
-This document does not define:
-
-- Exact TTL.
-- CDN policy.
-- ETag strategy for Catalog detail.
-- Cache invalidation interval.
-- Stale-while-revalidate behavior.
-
-Those values must remain aligned with the accepted API/NFR implementation policy rather than being guessed in the UX document.
-
-The key separation is:
-
-```text
-Catalog universal metadata
-    -> cacheable
-
-User Tracking state
-    -> not publicly cacheable as universal content
-```
-
----
-
----
-
-### Authenticated Tracking State
-
-#### 12.1 Owner
-
-**Owner:** Tracking
-
-When the client has an authenticated user session, the Catalog Item Detail experience may also request the user's personal Tracking relationship for the same `CatalogItemId`.
-
-That state may include, depending on the implemented milestone:
-
-- Whether the work is currently tracked.
-- Tracking item identity when one exists.
-- Library Status.
-- Current progress.
-- Overall rating.
-- Consumption dates.
-- Selected release track.
-- Manual Track state.
-- Release-relative state when the feature is active.
-- Revision / ETag information required for safe mutations.
-- Quick-action capability when relevant.
-
-This information remains private user state.
-
----
-
-#### 12.2 Anonymous Request Behavior
-
-An unauthenticated user can still load universal Catalog metadata.
-
-No Tracking lookup is required.
-
-Conceptually:
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Gateway
-    participant Catalog
-
-    Client->>Gateway: GET Catalog Item
-    Gateway->>Catalog: Route public Catalog read
-    Catalog-->>Gateway: Universal Catalog metadata
-    Gateway-->>Client: Catalog Item
-```
-
-The page must not require account authentication merely to read public Catalog information.
-
----
-
-#### 12.3 Authenticated Request Behavior
-
-For an authenticated user, the client logically loads:
+Authenticated client:
 
 ```text
 Catalog metadata
 +
-that user's Tracking state
+personal Tracking state
 ```
 
-Conceptually:
+The two reads may happen independently.
 
-```mermaid
-sequenceDiagram
-    participant Client
-    participant Gateway
-    participant Catalog
-    participant Tracking
-
-    par Universal Catalog read
-        Client->>Gateway: GET Catalog Item
-        Gateway->>Catalog: Route Catalog read
-        Catalog-->>Gateway: Universal Catalog metadata
-        Gateway-->>Client: Catalog metadata
-    and User Tracking read
-        Client->>Gateway: GET personal Tracking state for CatalogItemId
-        Gateway->>Tracking: Route authenticated Tracking read
-        Tracking-->>Gateway: User-specific Tracking state
-        Gateway-->>Client: Tracking state
-    end
-```
-
-This diagram defines the logical data split.
-
-It does not approve a new BFF, a new bounded context, or a mega endpoint.
-
-The final endpoint shapes must continue to follow `API_CONVENTIONS.md`.
+This logical composition does not create a new BFF or a giant endpoint by itself.
 
 ---
 
+## 7.4 No per-section fan-out
+
+One work-detail page should not make separate public requests for every title, character, link, or relationship.
+
+Catalog should expose a bounded detail representation for the normal screen.
+
+Naturally large child collections may use separate lazy/paginated reads later where justified.
+
 ---
 
-### No Per-Item Fan-Out Inside Catalog Detail
+## 7.5 Tracking failure does not destroy Catalog detail
 
-Catalog Item Detail may internally contain multiple visual sections, but that does not justify one public request per visual component.
-
-The Catalog service should expose a bounded work-detail representation appropriate to the product contract rather than requiring the client to issue separate requests for:
+If Catalog succeeds but personal Tracking state fails:
 
 ```text
-title
-cover
-synopsis
-character #1
-character #2
-relationship #1
-relationship #2
-official link #1
-...
+Catalog metadata remains usable
+Tracking controls/state become unavailable
 ```
 
-This is consistent with the existing Catalog hybrid model, including bounded subsets for common read-path data such as main characters and official links.
-
-Large or naturally unbounded child collections may use separate lazy/paginated reads later, but this document does not invent those boundaries.
-
----
-
----
-
-### Degraded State — Tracking Failure Must Not Destroy Catalog Detail
-
-#### 14.1 Failure Rule
-
-Catalog and Tracking are separate business capabilities.
-
-Therefore:
+The client must not interpret:
 
 ```text
-Tracking unavailable
-    !=
-Catalog Item unavailable
+Tracking request failed
 ```
 
-If Catalog succeeds but the authenticated Tracking-state request fails, the client must still render the universal Catalog Item metadata.
-
-Conceptually:
-
-```mermaid
-flowchart TD
-    Catalog["Catalog metadata request"]
-
-    Tracking["Tracking state request"]
-
-    CatalogOK{"Catalog succeeds?"}
-
-    TrackingOK{"Tracking succeeds?"}
-
-    Full["Render Catalog detail<br/>+ personal Tracking state"]
-
-    Degraded["Render Catalog detail<br/>Tracking controls/state unavailable"]
-
-    CatalogFailure["Catalog-detail failure behavior<br/>outside this document"]
-
-    Catalog --> CatalogOK
-    Tracking --> TrackingOK
-
-    CatalogOK -->|Yes| TrackingOK
-    CatalogOK -->|No| CatalogFailure
-
-    TrackingOK -->|Yes| Full
-    TrackingOK -->|No| Degraded
-```
-
----
-
-#### 14.2 Degraded-State Semantics
-
-When Tracking fails after Catalog metadata has loaded:
-
-- Catalog title/cover/synopsis/relationships/etc. remain usable.
-- The page must not be converted into a generic total `500` experience solely because personal Tracking state is unavailable.
-- Tracking-dependent controls must not pretend to know the user's current state.
-- The client must not interpret "Tracking request failed" as "this work is not in the user's library."
-- Mutations that require Tracking must not be offered as if the service were healthy.
-- The UI may communicate that personal Tracking information is temporarily unavailable without hiding the Catalog content.
-
-The semantic distinction is important:
+as:
 
 ```text
-Tracking returned:
-not tracked
+user does not track this work
 ```
 
-is a valid business result.
-
-```text
-Tracking could not be reached
-```
-
-is a degraded system state.
-
-Those outcomes must never be collapsed.
+Those are different states.
 
 ---
 
-#### 14.3 Cache Safety During Degradation
+# 8. My Library
 
-The Catalog response may remain cacheable according to its normal policy.
+My Library is Tracking-owned and may contain thousands of entries.
 
-The user-specific Tracking failure must not cause the platform to cache a personalized partial representation as if it were universal Catalog state.
-
-Likewise, a cached Catalog response must never contain another user's Tracking data.
+A user with ~4,000 items should not need to download all 4,000 before seeing anything useful.
 
 ---
 
----
+## 8.1 Cursor pagination is required
 
-### Catalog Item Detail Composition Guardrails
-
-The following rules are normative for this document:
-
-1. Catalog remains authoritative for universal work metadata.
-2. Tracking remains authoritative for the authenticated user's relationship/progress.
-3. The page logically composes those two data sources without merging ownership.
-4. Anonymous users load only Catalog metadata.
-5. Authenticated users may additionally load their Tracking state.
-6. Universal Catalog metadata is cache-eligible.
-7. User Tracking state must not be publicly cached as universal data.
-8. Tracking failure must not erase an otherwise successful Catalog detail read.
-9. Tracking failure must not be interpreted as "not tracked."
-10. Normal Catalog detail reads do not synchronously query AniList or MangaDex.
-11. This document does not approve a new BFF or new microservice for Catalog detail.
-12. This document does not approve one endpoint per visual subsection.
-13. This document does not approve a mega endpoint containing unrelated application state.
-14. Final endpoint DTOs remain governed by `API_CONVENTIONS.md` and OpenAPI contracts.
-
----
-
----
-
-## 6. My Library — STEP 9.3
-
-### 4.1 Product Purpose
-
-`My Library` is the user's primary browsable collection of tracked works.
-
-It represents potentially large Tracking-owned state and must remain efficient for users with:
-
-```text
-dozens
-hundreds
-thousands
-```
-
-of tracked items.
-
-A library containing approximately four thousand items must not require the client to download all four thousand records before it can become usable.
-
----
-
-### 4.2 Primary Owner
-
-**Owner:** Tracking
-
-My Library is not a Catalog collection with user state attached.
-
-Its primary semantics are defined by:
-
-- The authenticated UserId.
-- Tracking relationships.
-- Library Status.
-- Personal progress.
-- Ratings.
-- Consumption dates.
-- Tracking-specific state.
-
-Catalog presentation metadata may be composed or batch-resolved where necessary, but the collection itself is fundamentally a Tracking query.
-
----
-
----
-
-### Cursor Pagination Is Mandatory for My Library
-
-#### 5.1 Why Offset / Full Download Is Rejected
-
-The following patterns are not accepted as the default Library contract:
-
-```text
-GET entire library
-
-GET page=200
-with large OFFSET scans
-
-download 4,000 Tracking rows
-and filter them in the browser
-```
-
-These approaches increase:
-
-- Response size.
-- Database cost.
-- Client memory usage.
-- Time-to-first-usable-result.
-- Mobile bandwidth.
-- Risk of inconsistent paging while records are changing.
-
-The accepted public API convention already requires cursor pagination for large or potentially unbounded collections.
-
----
-
-#### 5.2 Standard Cursor Shape
-
-My Library follows the common Shiori collection contract.
-
-Conceptually:
-
-```json
-{
-  "items": [],
-  "nextCursor": "...",
-  "hasMore": true
-}
-```
-
-The cursor is opaque.
-
-The client:
-
-- stores it;
-- sends it back;
-- does not parse it;
-- does not construct it;
-- does not infer database order from it.
-
-Conceptually:
-
-```text
-Initial request
-    |
-    v
-items + nextCursor
-    |
-    v
-next request with cursor
-    |
-    v
-next stable slice
-```
-
----
-
-#### 5.3 Approved Baseline Limits
-
-The accepted API conventions define:
+The accepted default collection limits from `API_CONVENTIONS.md` are:
 
 ```text
 defaultLimit = 25
 maximumLimit = 100
 ```
 
-for paginated collection APIs unless a particular endpoint documents a smaller limit because of payload or operational cost.
+unless an endpoint defines a smaller limit.
 
-Therefore My Library must never interpret:
+The Library does not use “GET everything” or large OFFSET scans as its default public contract.
+
+---
+
+## 8.2 Deterministic ordering
+
+Cursor pagination requires stable ordering.
+
+The backend cannot rely on natural PostgreSQL row order.
+
+A stable tie-breaker belongs inside the cursor implementation.
+
+The client never needs to understand that internal continuation state.
+
+---
+
+## 8.3 Filters
+
+Library filters should be applied server-side before pagination.
+
+At minimum, Library Status is a meaningful filter.
+
+Public query parameters should:
+
+- use documented names
+- use public values
+- remain bounded/indexable
+- not expose SQL/PostgreSQL implementation details
+
+Changing filters or sorting starts a new cursor sequence.
+
+---
+
+## 8.4 Library row semantics
+
+A visible Library row should contain enough Tracking state to be useful without another Tracking request per row.
+
+Typical semantics:
+
+- `TrackingItemId`
+- `CatalogItemId`
+- Library Status
+- progress type
+- current progress summary
+- rating where applicable
+- relevant dates
+- concurrency state where needed
+
+The response should remain compact.
+
+---
+
+## 8.5 Avoid Catalog N+1
+
+This is not acceptable:
 
 ```text
-limit omitted
+Library returns 25 rows
+-> client performs 25 Catalog detail requests
 ```
 
-as:
+If visible cards need Catalog presentation data, use a bounded Catalog batch read or an explicitly approved compact projection.
 
-```text
-return every Tracking item
-```
-
-The final Library endpoint may adopt the baseline values directly or document a smaller endpoint-specific limit.
-
-It must not silently exceed the accepted maximum contract.
+Tracking should not become a second full Catalog.
 
 ---
 
-#### 5.4 Deterministic Ordering
+# 9. Detailed Progress Editor
 
-Cursor pagination requires deterministic ordering.
+The detailed editor exists for precise changes when quick update is not enough.
 
-The public API must not depend on:
-
-- PostgreSQL natural row order.
-- Current physical index order.
-- Accidental insertion order.
-
-If two records share the same visible sort value, the backend uses an internal stable tie-breaker.
-
-The cursor encapsulates that continuation state.
-
-The client does not need to know the database implementation.
-
----
-
----
-
-### My Library Filters
-
-#### 6.1 Filter Purpose
-
-Filtering reduces the Tracking collection before pagination.
-
-The client must be able to request meaningful subsets instead of downloading everything and filtering locally.
-
-At minimum, Library queries need to support the product distinctions already represented in Tracking, including documented filters such as:
-
-```text
-Library Status
-```
-
-For example, conceptually:
-
-```http
-GET /api/v1/tracking-items?status=inProgress
-```
-
-Additional Library filters may be approved per endpoint, but this document does not invent a final complete filter list.
-
----
-
-#### 6.2 Filter Semantics Follow API_CONVENTIONS
-
-Public filters:
-
-- use documented query parameters;
-- use lower camelCase names;
-- use public enum/string values;
-- must be bounded and indexable;
-- must not expose PostgreSQL column names;
-- must not expose arbitrary SQL/expression syntax.
-
-When one filter supports multiple repeated values:
-
-```text
-same filter field
-    -> OR semantics
-```
-
-Different filter fields:
-
-```text
-different fields
-    -> AND semantics
-```
-
-unless the endpoint contract explicitly says otherwise.
-
----
-
-#### 6.3 Filter Context and Cursor Context Are Bound Together
-
-A cursor is valid only for the logical query that produced it.
-
-Conceptually:
-
-```text
-status=inProgress
-sort=-updatedAt
-cursor=A
-```
-
-belongs to that query context.
-
-The client must not take `cursor=A` and reuse it for:
-
-```text
-status=completed
-```
-
-or another sort/filter combination.
-
-Changing the active Library query means starting a new cursor sequence.
-
----
-
----
-
-### My Library Read Model
-
-#### 7.1 Required Semantics
-
-A Library item must provide enough Tracking-owned information to display and continue working with a tracked entry without one extra Tracking request per row.
-
-The exact final DTO is defined in OpenAPI, but the read model needs to represent concepts such as:
-
-```text
-TrackingItemId
-CatalogItemId
-Library Status
-Progress type
-Current progress summary
-Rating when present
-Relevant Tracking dates when part of the list contract
-Revision / ETag-related state where required
-```
-
-The response must remain compact.
-
-Tracking must not replicate an entire Catalog Item representation into every Library row.
-
----
-
-#### 7.2 Avoiding Catalog N+1
-
-The client must not perform:
-
-```text
-Library returns 25 Tracking items
-        |
-        +-> 25 independent Catalog detail requests
-```
-
-merely to obtain ordinary card-level Catalog presentation data.
-
-If the final My Library presentation requires Catalog-owned titles/images for the visible page, the architecture should use a bounded solution compatible with existing rules, such as:
-
-- a batch Catalog read for the current page; or
-- a deliberately approved compact projection/read model.
-
-The solution must not turn Tracking into a second full Catalog.
-
-This document does not silently expand Tracking's local Catalog projection with presentation-heavy metadata.
-
----
-
----
-
-## 7. Detailed Progress Editor & Concurrency — STEP 9.3
-
-### 8.1 Purpose
-
-The Detailed Progress Editor is the precise Tracking surface used when a user needs more control than a quick update.
-
-It must faithfully represent the polymorphic progress model already approved by Shiori.
-
-The editor consumes backend domain state.
-
-It does not reinterpret progress into a single generic number.
-
----
-
----
-
-### Polymorphic Progress Contract
-
-#### 9.1 Explicit Discriminator
-
-Public Tracking progress uses an explicit discriminator.
-
-Current families are:
-
-```text
-audiovisual
-reading
-```
-
-The client must not infer the progress family by inspecting whichever fields happen to be present.
+Progress stays polymorphic.
 
 Conceptually:
 
@@ -1506,89 +736,29 @@ Conceptually:
 }
 ```
 
-The exact DTO remains governed by `API_CONVENTIONS.md`.
+The discriminator is explicit.
+
+The client does not infer the progress type from whichever fields happen to exist.
 
 ---
 
-#### 9.2 Audiovisual Progress
+## 9.1 Server validation remains authoritative
 
-Audiovisual progress represents concepts such as:
+Client-side validation is useful for immediate feedback, but Tracking still owns:
 
-```text
-episode
-playback position
-```
-
-Playback position is not interchangeable with reading-page position.
-
-Variant-specific fields must remain separated.
-
----
-
-#### 9.3 Reading Progress
-
-Reading progress represents:
-
-```text
-volume
-chapter
-page
-```
-
-Reading chapter identity/labeling must preserve irregular values as first-class state.
-
-Examples include:
-
-```text
-0
-10.5
-Extra
-Special
-One-shot
-named interlude
-```
-
-Therefore this assumption is prohibited:
-
-```text
-chapter = integer
-```
-
-and this is also prohibited as a general rule:
-
-```text
-nextChapter = currentChapter + 1
-```
-
-A public API or client model that forces a chapter into integer-only semantics would contradict the approved product contract.
+- resource ownership
+- progress-family rules
+- publication-unit validity
+- revision state
+- domain transitions
+- release-track compatibility
+- persistence
 
 ---
 
-#### 9.4 Client Validation Does Not Replace Server Validation
+# 10. Optimistic concurrency
 
-The client may provide immediate form-level validation for known contract rules.
-
-However, server-side Tracking remains authoritative for:
-
-- Resource ownership.
-- Progress family validity.
-- Publication-unit validity.
-- Current Tracking revision.
-- Domain state transitions.
-- Release-track compatibility.
-- Persistence.
-
-A request that looks valid locally may still be rejected by the authoritative Tracking service.
-
----
-
----
-
-### Optimistic Concurrency / ETag UX
-
-#### 10.1 Problem Being Solved
-
-The same Tracking item may be open on more than one client.
+The same Tracking item may be open on several clients.
 
 Example:
 
@@ -1596,20 +766,17 @@ Example:
 Phone loads revision 41
 Desktop loads revision 41
 
-Phone saves change
-revision 41 -> 42
+Phone saves
+revision -> 42
 
-Desktop still holds revision 41
-and tries to save another change
+Desktop saves using old revision 41
 ```
 
-Without concurrency protection, the desktop could silently overwrite newer progress.
-
-Shiori explicitly rejects this.
+The second request should not silently overwrite revision 42.
 
 ---
 
-#### 10.2 Server Concurrency Contract
+## 10.1 ETag / `If-Match`
 
 Concurrency-protected mutations use:
 
@@ -1619,1437 +786,411 @@ If-Match
 server-side revision
 ```
 
-A successful mutation returns the new representation and the new ETag when that endpoint contract returns a body.
-
-Conceptually:
-
-```http
-If-Match: "shiori-revision-41"
-```
-
-If revision 41 is still current:
-
-```text
-mutation succeeds
-revision becomes 42
-new ETag represents revision 42
-```
-
-The expected revision check and mutation are one atomic server decision.
-
----
-
----
-
-### `412 Precondition Failed` Is a Conflict With the Client's Loaded Representation
-
-#### 11.1 Required HTTP Meaning
-
-When the Tracking resource still exists but:
-
-```text
-If-Match supplied by client
-        !=
-current server representation
-```
-
-Shiori returns:
+If the resource changed after the client loaded it, the server returns:
 
 ```http
 412 Precondition Failed
 ```
 
-with RFC 9457 Problem Details and stable code:
+with Problem Details and code:
 
 ```text
 tracking.revision_conflict
 ```
 
-The requested mutation is not applied.
-
-`409 Conflict` remains reserved for domain/business-state conflicts unrelated to the failed `If-Match` precondition.
+`409 Conflict` remains for business/domain conflicts that are not stale `If-Match` preconditions.
 
 ---
 
----
+## 10.2 Client behavior after `412`
 
-### Client Behavior After `412`
+The client does not blindly fetch a new ETag and resubmit the old mutation.
 
-#### 12.1 Blind Retry Is Forbidden
-
-After receiving `412`, the client must not:
+Instead:
 
 ```text
-fetch new ETag
-+
-silently resend old payload
+1. re-fetch current Tracking state
+2. obtain new ETag
+3. preserve the user's attempted change locally
+4. reconcile intent with the new server state
+5. retry only if still appropriate
 ```
 
-without considering the updated server state.
+The UX needs to distinguish:
 
-That would defeat the purpose of optimistic concurrency.
+```text
+authoritative server state
+!=
+user's attempted local change
+```
+
+There is no generic “highest progress wins” rule.
+
+A lower value can be an intentional correction.
 
 ---
 
-#### 12.2 Required Reconciliation Flow
+# 11. Progress Vault / Undo
 
-The accepted API convention already requires the client to:
+Phase 1 supports undoing the most recent progress update for one tracked work.
 
-```text
-1. Re-fetch the Tracking resource.
-2. Read the current server representation and new ETag.
-3. Reconcile the user's intended action.
-4. Retry only if the intended mutation is still appropriate.
-```
-
-The UX therefore needs to preserve two distinct states:
-
-```text
-A. Server state now stored by Shiori
-
-B. User's attempted local change
-```
-
-The client must not collapse one into the other.
+It does not expose the full historical timeline.
 
 ---
 
-#### 12.3 Server State vs Attempted State
+## 11.1 `canUndo` comes from Tracking
 
-Conceptually:
+The frontend cannot infer Undo eligibility from visible progress.
 
-```text
-User loaded:
-Chapter 72
-ETag revision-10
+If current chapter is 74, that does not prove the previous state was 73.
 
-Another device saved:
-Chapter 74
-ETag revision-11
-
-Current client attempted:
-Chapter 73
-
-Server returns:
-412
-```
-
-The client then obtains:
+It might have been:
 
 ```text
-SERVER CURRENT
-Chapter 74
-
-USER ATTEMPT
-Chapter 73
-```
-
-The user experience must be able to explain that the attempted state was based on an older representation.
-
-This document does not define the visual presentation.
-
-It defines the data requirement:
-
-> **The client must retain its attempted mutation locally while re-fetching the authoritative current Tracking representation from the backend.**
-
----
-
-#### 12.4 No Automatic "Highest Wins" Rule
-
-Shiori must not invent a generic conflict rule such as:
-
-```text
-largest episode wins
-largest chapter wins
-latest request wins
-```
-
-for ordinary concurrent user edits.
-
-A lower number may be:
-
-- A correction.
-- An intentional rewind.
-- A different edition adjustment.
-- A repair after a mistaken update.
-
-Therefore concurrency resolution must preserve user intent rather than infer it from numeric magnitude.
-
----
-
-#### 12.5 Reconciliation Result
-
-After the client has:
-
-```text
-fresh server representation
-+
-fresh ETag
-+
-original attempted user intent
-```
-
-it may allow a new intentional mutation.
-
-That new attempt uses the new concurrency token.
-
-The server again remains authoritative.
-
----
-
----
-
-### Error-State Distinction
-
-The Detailed Progress Editor must distinguish:
-
-```text
-400
-request/contract invalid
-
-401
-authentication not established
-
-403
-authenticated but not authorized
-
-404
-resource unavailable/not addressable
-
-409
-domain-state conflict
-
-412
-stale concurrency precondition
-
-5xx / dependency failure
-server-side failure
-```
-
-A `412` must not be presented as if the user's data were syntactically invalid.
-
-It means:
-
-> **The resource changed after this client loaded it.**
-
----
-
----
-
-## 8. Progress Vault / Undo — STEP 9.3
-
-### 14.1 Product Purpose
-
-Progress Vault protects the user from the most recent mistaken progress update.
-
-Phase 1 supports:
-
-```text
-undo the single most recent progress update
-for one tracked work
-```
-
-It does not expose the complete historical timeline.
-
-Full historical browsing remains Phase 2 scope.
-
----
-
----
-
-### Server-Derived `canUndo`
-
-#### 15.1 Why `canUndo` Must Come From Tracking
-
-The frontend cannot reliably determine whether an Undo is valid by examining the visible current progress.
-
-For example:
-
-```text
-current chapter = 74
-```
-
-does not prove that:
-
-```text
-previous chapter = 73
-```
-
-The previous state could have been:
-
-```text
-chapter 72.5
+72.5
 Extra
 another volume
 same chapter with different page
-different playback position
-different status-adjacent Tracking state
 ```
 
-Therefore the backend must expose whether the latest update is currently undoable.
-
-The read contract must provide a server-derived flag:
+So Tracking provides a server-derived:
 
 ```text
 canUndo
 ```
 
-Conceptually:
-
-```json
-{
-  "canUndo": true
-}
-```
-
-The final surrounding DTO shape remains an OpenAPI decision.
-
 ---
 
----
+## 11.2 Exact previous state
 
-### Exact Previous State
+When Undo is available, the backend must be able to provide the exact restorable state.
 
-#### 16.1 Undo Preview Data Requirement
-
-When `canUndo = true`, the backend must be able to provide the exact state that the Undo operation would restore.
-
-This state must preserve the relevant progress family.
-
-Conceptually:
-
-```json
-{
-  "canUndo": true,
-  "previousState": {
-    "progress": {
-      "type": "reading",
-      "volume": "6",
-      "chapter": "73",
-      "page": 17
-    }
-  }
-}
-```
-
-This example is conceptual.
-
-The key contract is:
-
-> **The server supplies the exact restorable previous Tracking state; the client does not derive it arithmetically.**
-
----
-
-#### 16.2 Audiovisual Exact Restore
-
-A previous audiovisual state may require restoring both:
+For audiovisual content that might mean:
 
 ```text
-episode
-playback position
-```
-
-Example:
-
-```text
-Current:
-Episode 18
-00:00
-
-Previous:
 Episode 17
 19:42
 ```
 
-Undo restores the previous stored state.
+not simply “episode minus one.”
 
-It does not merely decrement the episode and leave another field untouched.
-
----
-
-#### 16.3 Reading Exact Restore
-
-A previous reading state may require restoring:
+For reading it might mean:
 
 ```text
-volume
-chapter label / unit
-page
-```
-
-Example:
-
-```text
-Current:
 Volume 6
-Chapter 74
-Page 0
-
-Previous:
-Volume 6
-Chapter 73
+Chapter Extra
 Page 17
 ```
 
-or:
-
-```text
-Current:
-Chapter 11
-
-Previous:
-Chapter Extra
-```
-
-The client must not perform:
-
-```text
-chapter - 1
-```
-
-because Shiori's chapter model is not integer arithmetic.
+The client never reconstructs Undo arithmetically.
 
 ---
 
----
+## 11.3 Undo is an intent
 
-### Undo Is an Intent, Not a Client-Side Calculation
-
-#### 17.1 Public Operation Semantics
-
-Undo is a real domain operation.
-
-The accepted API style already permits a route such as:
+A route such as:
 
 ```http
 POST /api/v1/tracking-items/{id}/undo
 ```
 
-The client sends the intent:
+represents:
 
-```text
-Undo the latest undoable progress update for this Tracking item.
-```
+> Undo the latest currently undoable progress update.
 
-The client does not send:
+Tracking decides:
 
-```text
-set chapter to current - 1
-```
-
-as a substitute for Progress Vault.
-
----
-
-#### 17.2 Backend Responsibility
-
-Tracking resolves:
-
-- Whether Undo is allowed.
-- Which historical state is the latest undoable state.
-- The exact state to restore.
-- Current concurrency validity.
-- Atomic persistence of the restored current state.
-- Preservation of immutable history.
+- whether Undo is still allowed
+- which state is restored
+- concurrency validity
+- current-state update
+- historical preservation
 
 Undo changes current state.
 
-It does not delete or rewrite the historical fact that the original update occurred.
+It does not erase the history of the original update.
 
 ---
 
----
+# 12. Public Profile
 
-### `canUndo` Is Not a Permanent Guarantee
+Public Profile is a read-only tracking-sharing surface.
 
-The value:
+It is not the foundation for a social network.
 
-```text
-canUndo = true
-```
-
-describes the server state at the time of the read.
-
-Another mutation may occur before the user sends Undo.
-
-Therefore Undo still needs authoritative server-side validation when executed.
-
-The client must not assume that a previously loaded `canUndo = true` guarantees later success.
-
-Where the final Undo endpoint requires concurrency protection, it must follow the accepted ETag / `If-Match` semantics.
-
----
-
----
-
-### Undo Failure Semantics
-
-The client must distinguish:
-
-```text
-canUndo = false
-```
-
-from:
-
-```text
-Undo request failed because the resource changed
-```
-
-and from:
-
-```text
-Tracking service unavailable
-```
-
-These are different states.
-
-The backend must express the reason through the standard HTTP / Problem Details contract rather than forcing the frontend to infer it.
-
----
-
----
-
-## 9. Public Profile — STEP 9.4
-
-### 20.1 Product Purpose
-
-The Public Profile is a read-only sharing surface centered on explicitly shareable Tracking information.
-
-It is not a social-network profile.
-
-Its architecture is already fixed by ADR-013.
-
-The path is:
+The accepted architecture is:
 
 ```text
 Client
-  |
-  v
-YARP Gateway
-  |
-  v
-Profile BFF / Read Composer
-  |
-  | Identity first
-  v
-Identity
-  |
-  | only if safely Public
-  v
-Tracking
+-> YARP
+-> Profile BFF
+-> Identity first
+-> Tracking only if Identity safely confirms Public
 ```
 
-YARP remains routing/edge infrastructure.
+---
 
-The Profile BFF is the stateless read-composition boundary.
+## 12.1 Ownership
+
+Identity owns:
+
+- stable UserId
+- username
+- display name
+- avatar
+- biography
+- profile-level visibility
+
+Tracking owns:
+
+- public lists
+- public tracking sections
+- statistics
+- progress-derived sections
+- Tracking privacy
+
+The BFF composes; it does not become the owner of either side.
 
 ---
 
----
-
-### Public Profile Ownership
-
-#### 21.1 Identity-Owned Profile Data
-
-Identity owns profile/account concepts such as:
-
-```text
-Stable UserId
-Username
-DisplayName
-Avatar
-Biography
-Profile-level visibility
-```
-
-These values are not copied into Tracking as canonical profile state.
-
----
-
-#### 21.2 Tracking-Owned Public Sections
-
-Tracking owns Tracking-specific sections such as:
-
-```text
-Publicly authorized library/list data
-Statistics
-Progress-derived sections when approved
-Tracking-specific profile sections
-```
-
-Tracking remains responsible for filtering its own public representation according to the applicable privacy rules.
-
----
-
----
-
-### Identity Is the Mandatory Privacy Gate
-
-The Profile BFF always evaluates Identity first.
-
-The BFF must not ask Tracking for public-profile data until Identity has safely established that the profile is eligible for public composition.
+## 12.2 Identity is the privacy gate
 
 Client-supplied values such as:
 
 ```text
 profileIsPublic=true
-targetUserId=...
 ```
 
 are not authorization proof.
 
-Privacy is enforced by backend owners.
+The BFF always asks Identity first.
 
-Frontend hiding is never sufficient authorization.
-
----
-
----
-
-### Failure Case A — Identity Fails
-
-#### 23.1 Required Behavior
-
-If Identity:
-
-- is unavailable;
-- times out;
-- returns an unsupported visibility state;
-- returns malformed data that prevents safe policy evaluation;
-- otherwise cannot establish public eligibility;
-
-the Profile BFF must:
+If Identity cannot safely determine eligibility:
 
 ```text
 FAIL CLOSED
-```
-
-Meaning:
-
-```text
-No Tracking public-profile call is trusted as a fallback.
-No Tracking public-profile data is exposed.
-The composed Public Profile request does not degrade into
-an unauthorized partial Tracking response.
+-> no Tracking profile data exposed
 ```
 
 ---
 
-#### 23.2 Client UX Meaning
+## 12.3 Identity Public, Tracking unavailable
 
-From the client perspective:
-
-```text
-Identity privacy authority unavailable
-        |
-        v
-Public Profile cannot be safely composed
-        |
-        v
-Full profile request fails
-```
-
-The client must not attempt to reconstruct a profile directly from Tracking.
-
-The exact error presentation is not defined here.
-
-The security behavior is.
-
----
-
----
-
-### Failure Case B — Identity Says Public, Tracking Fails
-
-#### 24.1 Required Behavior
-
-If Identity successfully confirms:
+If Identity already confirmed `Public` and Tracking then fails:
 
 ```text
-Profile = Public
-```
-
-but Tracking is unavailable afterward, ADR-013 explicitly allows:
-
-```http
 200 OK
++ Identity-owned profile metadata
++ Tracking sections omitted
 ```
 
-with a degraded Identity-only profile representation.
+is the approved degraded response.
 
-Tracking-owned sections are omitted.
-
-This is an intentional degraded-success contract.
-
----
-
-#### 24.2 Degraded Representation
-
-The degraded response may still contain authorized Identity-owned metadata such as:
+The response must not fabricate:
 
 ```text
-Username / display identity
-Avatar
-Biography
+publicLists = []
+statistics = 0
 ```
 
-It omits Tracking-owned sections such as:
+when the real condition is dependency failure.
+
+“Empty” and “unavailable” remain different states.
+
+---
+
+## 12.4 Private/non-addressable profile
+
+For third-party public lookup:
 
 ```text
-Public lists
-Tracking statistics
-Other Tracking-derived profile sections
+Private -> 404
+Nonexistent -> 404
 ```
 
-The response must not fabricate those sections as empty data if their absence is actually caused by dependency failure and the contract supports omission/degraded metadata.
+The public endpoint does not reveal hidden account existence through a different response.
 
-The client must be able to distinguish:
+---
+
+## 12.5 Cache safety
+
+A previously cached public result never becomes an authorization source.
+
+Current backend privacy authority still decides whether profile data may be exposed.
+
+---
+
+# 13. Settings
+
+Settings is a frontend grouping, not one backend-owned domain object.
+
+Ownership stays split.
+
+| Setting | Owner |
+|---|---|
+| Email / account identity | Identity |
+| Password / credentials | Identity |
+| Username / display profile | Identity |
+| Avatar / biography | Identity |
+| Profile visibility | Identity |
+| Selected release track | Tracking |
+| Manual Track state | Tracking |
+| Release Intelligence preference/state | Tracking |
+
+---
+
+## 13.1 No distributed Settings transaction
+
+A screen may show several settings together, but each mutation remains local to its owner.
 
 ```text
-This user has no public lists
+change email
+-> Identity transaction
+
+change profile visibility
+-> Identity transaction
+
+change release track
+-> Tracking transaction
 ```
 
-from:
-
-```text
-Tracking sections are unavailable in this degraded response
-```
-
-through the composed public-profile contract.
-
-The exact field used to express degraded state remains an endpoint/OpenAPI design detail if not already fixed elsewhere.
+Frontend convenience does not justify one transaction across Identity and Tracking databases.
 
 ---
 
----
+## 13.2 Failure isolation
 
-### Private Profile Behavior
+If Identity is unavailable, Tracking does not become the source of truth for account/profile settings.
 
-For third-party public-profile lookup:
+If Tracking is unavailable, Identity does not become the source of truth for release-track settings.
 
-```text
-Private profile
-    -> 404 Not Found
-
-Nonexistent / non-addressable profile
-    -> 404 Not Found
-```
-
-The public contract must not disclose a different privacy reason that reveals hidden profile existence.
-
-This is server-side privacy behavior, not a frontend presentation trick.
+Healthy sections may remain usable independently where safe.
 
 ---
 
----
+# 14. Smart Staging Import
 
-### Public Profile Failure Matrix
+Import is a durable Tracking-owned workflow.
 
-| Identity result | Tracking result | Public-profile outcome |
-|---|---|---|
-| Public | Success | Full composed public profile |
-| Public | Failure / unavailable | `200` degraded Identity-only profile; Tracking sections omitted |
-| Private | Not queried for exposure | `404` public-profile result |
-| Identity unavailable | Tracking must not be used as fallback | Fail Closed |
-| Unsupported / unsafe Identity policy | Tracking must not be exposed | Fail Closed |
-
----
-
----
-
-### Profile Caching Guardrail
-
-Because profile visibility can change and because the composed result may contain Tracking data subject to privacy rules, caching must never bypass the Identity-first authorization model.
-
-A previously cached Public result must not become an authorization source after Identity policy changes.
-
-This document does not invent cache TTLs or a final cache architecture.
-
-It only establishes:
-
-> **Cache state never overrides current backend privacy authority.**
-
----
-
----
-
-## 10. Settings — STEP 9.4
-
-### 28.1 Purpose
-
-Settings is not one domain object owned by one service.
-
-It is a client-facing grouping over capabilities owned by different bounded contexts.
-
-The frontend may present them together, but persistence ownership remains separated.
-
----
-
----
-
-### Settings Ownership Matrix
-
-| Setting / capability | Authoritative owner | Notes |
-|---|---|---|
-| Email / account access identity | **Identity** | Account / credential concern |
-| Password / credential management | **Identity** | Authentication concern |
-| Profile-level visibility | **Identity** | Public-profile eligibility/privacy authority |
-| Username / display profile metadata when exposed in Settings | **Identity** | Profile metadata |
-| Avatar / biography when exposed in Settings | **Identity** | Profile metadata |
-| Selected release track per tracked work | **Tracking** | User-to-work Tracking preference |
-| Manual Track state per tracked work | **Tracking** | Tracking-specific release behavior |
-| Release Intelligence enabled/disabled per tracked work | **Tracking** | Tracking-specific behavior when represented as a user preference/state |
-
-This document does not move any of these values between services merely to simplify one Settings screen.
-
----
-
----
-
-### Identity-Owned Settings
-
-Identity owns the account/security/profile portion.
-
-Examples:
-
-```text
-Email
-Password / credential management
-Username
-DisplayName
-Avatar
-Biography
-Profile-level visibility
-```
-
-A Settings read or mutation involving these values is routed to Identity through the normal public API.
-
-Tracking does not read or write Identity's database.
-
----
-
----
-
-### Tracking-Owned Release Preferences
-
-Tracking owns user-specific release behavior for a tracked work.
-
-Examples:
-
-```text
-Selected automated release track
-Manual Track Mode
-Release Intelligence enabled/disabled state
-```
-
-These values affect the relationship between:
-
-```text
-user progress
-and
-verified release information
-```
-
-Therefore they belong to Tracking.
-
-Catalog owns the available verified release facts/tracks.
-
-Tracking owns which supported track the user follows and whether the user's Tracking relationship uses Manual Track behavior.
-
----
-
----
-
-### Settings Must Not Create Cross-Service Transactions
-
-A Settings screen may load information from both Identity and Tracking.
-
-That does not mean one mutation may create a distributed transaction across both databases.
-
-Conceptually:
-
-```text
-Change email
-    -> Identity-local mutation
-
-Change profile visibility
-    -> Identity-local mutation
-
-Change selected release track
-    -> Tracking-local mutation
-```
-
-Each owning bounded context validates and persists its own change.
-
-The frontend may sequence multiple independent user actions, but no screen convenience justifies:
-
-```text
-one database transaction
-spanning Identity PostgreSQL
-and Tracking PostgreSQL
-```
-
----
-
----
-
-### Settings Read Composition
-
-The client may need multiple logical settings sections.
-
-The goal is not necessarily to force all Settings data into one mega endpoint.
-
-The goal is to keep:
-
-```text
-bounded number of reads
-clear ownership
-stable contracts
-no per-row N+1
-```
-
-Identity settings and Tracking release preferences may remain separate resource families.
-
-A future composition layer must not be introduced solely because the frontend places them under one navigation label.
-
----
-
----
-
-### Settings Error Isolation
-
-Because Settings spans multiple bounded contexts, one service failure must not be silently converted into stale authority from another service.
-
-Examples:
-
-```text
-Identity unavailable
-    -> account/profile settings unavailable
-    -> Tracking does not become authority for email/password/visibility
-
-Tracking unavailable
-    -> release-track preferences unavailable
-    -> Identity does not become authority for Tracking preferences
-```
-
-If one settings area can safely remain usable while another service is unavailable, the client may expose the healthy capability independently.
-
-This is capability isolation, not ownership fallback.
-
----
-
----
-
-### Visibility Settings Are Security-Sensitive
-
-Profile-level visibility is owned by Identity and participates directly in ADR-013 Public Profile authorization.
-
-Therefore:
-
-- The current value must come from Identity.
-- Mutations must be enforced by Identity.
-- The client must not treat a locally cached visibility toggle as backend authorization.
-- Profile BFF public reads continue to evaluate Identity rather than trusting client state.
-
-A successful Settings mutation does not change this architecture.
-
----
-
----
-
-### Release Preference Settings Are Tracking-Sensitive
-
-A release-track preference affects calculations such as:
-
-```text
-verified new-content availability
-UpToDate
-Manual Track behavior
-Continue ordering inputs
-```
-
-when those capabilities are active.
-
-Therefore the client must not calculate or persist release-track selection only locally.
-
-Tracking stores the authoritative selected track / Manual Track state.
-
-Catalog supplies supported verified release facts through the established projection flow.
-
----
-
----
-
-### No Cross-Service Database Reads for Settings
-
-The following remain prohibited:
-
-```text
-Identity reading Tracking PostgreSQL
-Tracking reading Identity PostgreSQL
-Profile BFF reading either database directly
-Gateway reading business databases
-```
-
-Settings does not weaken Database-per-Service.
-
----
-
----
-
-## 11. Smart Staging Import — STEP 9.5
-
-### 3.1 Product Purpose
-
-Smart Staging Import allows a user to bring an existing supported library into Shiori without rebuilding years of Tracking history manually.
-
-The approved product flow remains:
+The user-facing shape is:
 
 ```text
 Upload
-   |
-   v
-Background validation / processing / matching
-   |
-   v
-Preview
-   |
-   v
-Explicit user confirmation
-   |
-   v
-Background bounded commit
-   |
-   v
-Completion
+-> Processing
+-> Preview
+-> Confirm
+-> Background commit
+-> Completed
 ```
 
-The critical architecture property is:
-
-> **Import is a durable asynchronous workflow, not one long HTTP request.**
+The original HTTP request is not kept open for the whole workflow.
 
 ---
 
----
-
-### Import Starts With `POST` and Durable Acceptance
-
-The client starts the workflow through the documented Import Job resource.
+## 14.1 Durable acceptance
 
 Conceptually:
 
 ```http
 POST /api/v1/import-jobs
-Authorization: Bearer <access_token>
-Idempotency-Key: <client-generated-key>
+Idempotency-Key: ...
 Content-Type: multipart/form-data
 ```
 
-After bounded request validation and durable Job creation, Shiori returns:
+After bounded validation and durable job creation:
 
 ```http
-HTTP/1.1 202 Accepted
+202 Accepted
 Location: /api/v1/import-jobs/{jobId}
 ```
 
-Conceptually:
+`202` means:
 
-```json
-{
-  "id": "01JIMP...",
-  "state": "pending",
-  "createdAt": "2026-08-09T18:40:00Z",
-  "updatedAt": "2026-08-09T18:40:00Z"
-}
-```
+> Shiori accepted the durable asynchronous job.
 
-`202 Accepted` means:
-
-```text
-The Import Job now exists durably
-and Shiori accepted responsibility
-for continuing the asynchronous workflow.
-```
-
-It does **not** mean:
-
-```text
-The import is complete.
-```
+It does not mean the import is complete.
 
 ---
 
----
+## 14.2 Job ID is the client handle
 
-### `JobId` and `Location` Are the Client's Durable Handle
-
-The client receives:
+The client uses:
 
 ```text
-Import Job ID
-+
-canonical Location URI
+JobId
+Location
 ```
 
-The `Location` header is the preferred canonical resource address.
+to read workflow state.
 
-The client must not infer RabbitMQ queue names, Worker identifiers, database IDs, or internal process state.
+It never needs:
 
-Conceptually:
+- RabbitMQ queue names
+- Worker IDs
+- internal database identifiers
+- process-memory state
 
-```text
-POST Import
-    |
-    v
-202 Accepted
-    |
-    +-- JobId
-    |
-    +-- Location: /api/v1/import-jobs/{jobId}
-```
-
-The durable Job is the user-visible source of workflow state.
-
-RabbitMQ is not.
+The durable Job is the source of truth for workflow progress.
 
 ---
 
----
+## 14.3 Polling
 
-### Import Uses Polling
-
-#### 6.1 Polling Contract
-
-The client observes Import progress by polling the durable Job resource.
-
-Conceptually:
-
-```http
-GET /api/v1/import-jobs/{jobId}
-Authorization: Bearer <access_token>
-```
-
-A normal successful read of an existing Job returns:
-
-```http
-200 OK
-```
-
-even when the Job's business state represents failure.
-
-The distinction is:
-
-```text
-HTTP request result
-    !=
-Import workflow result
-```
-
-For example:
-
-```text
-GET Job succeeded
-Job.state = failed
-```
-
-is a successful HTTP retrieval of a failed asynchronous workflow.
-
----
-
-#### 6.2 No WebSockets for Import
-
-The MVP Import UX uses:
+The MVP observes import state through:
 
 ```text
 POST
--> 202 Accepted
+-> 202
 -> GET Job polling
 ```
 
-This document does not introduce:
+No WebSockets, SSE, or broker-to-browser mechanism is introduced for this workflow.
+
+A successful GET of a failed job still returns the Job successfully:
 
 ```text
-WebSockets
-Server-Sent Events
-long polling
-broker-to-browser messaging
+HTTP request succeeded
+Job.state = failed
 ```
 
-for Smart Staging Import.
-
-Polling is sufficient because the authoritative state already exists durably.
-
-The exact polling interval, retry delay, and adaptive backoff policy are not invented in this document.
-
-They must be chosen explicitly at implementation/client-contract time.
+These are different layers of status.
 
 ---
 
----
+## 14.4 UX states vs durable states
 
-### UX Macro-States vs Durable Backend States
+The user-facing phases may group several backend states:
 
-The user-facing workflow may be understood through the following macro-states:
-
-```text
-Uploading
-Processing
-Preview
-Confirming
-Completed
-```
-
-Those UX labels do not replace Tracking's accepted durable Import Job lifecycle.
-
-They map to it.
-
----
-
-#### 7.1 `Uploading`
-
-`Uploading` describes the client/request-transfer phase before durable acceptance has been confirmed.
-
-Conceptually:
-
-```text
-Client transmitting file
-        |
-        v
-Gateway / Tracking bounded validation
-```
-
-Important distinction:
-
-> **Before `202 Accepted`, the client must not assume that a durable Import Job exists.**
-
-If the network fails before Shiori returns durable acceptance, the client follows the normal retry/idempotency contract for the POST operation.
-
-`Uploading` is therefore primarily a request-transfer UX state, not one of Tracking's durable Import Job states.
-
----
-
-#### 7.2 `Processing`
-
-After `202 Accepted`, the high-level UX state `Processing` may represent the accepted backend states:
-
-```text
-pending
-validating
-processing
-```
-
-Their backend meanings remain distinct:
-
-```text
-pending
-    Job exists durably but work has not begun.
-
-validating
-    Import validation is executing.
-
-processing
-    Parsing, staging, matching, and approved background
-    processing are executing.
-```
-
-The UI may group these into a broad user-facing Processing phase, but the public Job contract preserves the actual durable state.
-
----
-
-#### 7.3 `Preview`
-
-The user-facing `Preview` phase corresponds to:
-
-```text
-awaitingConfirmation
-```
-
-At this point:
-
-- Parsing/matching has reached the approved preview stage.
-- Staging state exists.
-- The client can inspect matched, unmatched, ambiguous, invalid, or unresolved entries as defined by the Import contract.
-- The live Tracking library has not yet been modified by the Import confirmation step.
-- Closing the browser does not implicitly confirm the Import.
-
-The Job waits durably for an explicit user decision.
-
----
-
-#### 7.4 `Confirming`
-
-After the user explicitly confirms the staged result, the workflow moves into the durable commit phase.
-
-The accepted backend state is:
-
-```text
-committing
-```
-
-The user-facing macro-state may be described as:
-
-```text
-Confirming
-```
-
-but the client must understand that the actual work is a background bounded commit process.
-
-The browser does not hold one request open while thousands of entries are committed.
-
----
-
-#### 7.5 `Completed`
-
-The user-facing `Completed` state corresponds to:
-
-```text
-completed
-```
-
-only after Tracking has durably finalized the Import Job according to the accepted finalization rules.
-
-Completion is not inferred from:
-
-- Upload finishing.
-- Parsing finishing.
-- Preview becoming available.
-- The user pressing Confirm.
-- One commit batch finishing.
-- RabbitMQ delivery timing.
-
-The authoritative Job state is Tracking-owned durable state.
-
----
-
----
-
-### Exceptional / Terminal Import States
-
-The simplified UX path:
-
-```text
-Uploading
--> Processing
--> Preview
--> Confirming
--> Completed
-```
-
-does not remove the accepted exceptional backend states:
-
-```text
-partiallyCompleted
-failed
-cancelled
-```
-
-The client must be able to represent them truthfully.
-
-It must not convert every non-Completed terminal outcome into a generic network error.
-
----
-
----
-
-### Import State Mapping
-
-| User-facing macro-state | Durable backend meaning |
+| UX state | Durable backend state |
 |---|---|
-| `Uploading` | File/request transfer before confirmed durable Job acceptance |
-| `Processing` | `pending`, `validating`, or `processing` |
-| `Preview` | `awaitingConfirmation` |
-| `Confirming` | `committing` |
-| `Completed` | `completed` |
-| Exceptional terminal state | `partiallyCompleted`, `failed`, or `cancelled` |
+| Uploading | request transfer before `202` |
+| Processing | `pending`, `validating`, `processing` |
+| Preview | `awaitingConfirmation` |
+| Confirming | `committing` |
+| Completed | `completed` |
+| Exceptional | `partiallyCompleted`, `failed`, `cancelled` |
 
-The mapping exists for UX clarity.
-
-The backend state remains the authoritative workflow contract.
+The durable backend state remains authoritative.
 
 ---
 
----
+## 14.5 Browser can close
 
-### Import Does Not Block the User Session
-
-Once `202 Accepted` has been returned:
+Once the server returns `202`, the job continues independently.
 
 ```text
-HTTP upload request ends
-        |
-        v
-Job continues independently
-        |
-        v
-Workers / RabbitMQ / staging continue
+browser closes
+-> worker continues
+-> user returns later
+-> GET Job
+-> current durable state is shown
 ```
 
-The user is not required to keep:
-
-- The same browser tab open.
-- The original HTTP connection alive.
-- The browser process running.
-- A permanent authenticated HTTP request open.
-
-The Import Job is durable backend state.
+The workflow does not live in browser memory.
 
 ---
 
----
-
-### Closing the Browser
-
-The following sequence is valid:
-
-```text
-User starts Import
-        |
-        v
-202 Accepted
-JobId = J1
-        |
-        v
-User closes browser
-        |
-        v
-Import workers continue
-        |
-        v
-User returns later
-        |
-        v
-Client reads Job J1
-        |
-        v
-Current durable state is shown
-```
-
-The workflow must not depend on browser process memory to continue.
-
-If authentication is required again when the user returns, the user re-establishes an authenticated session and then accesses only Jobs they are authorized to inspect.
-
-A Job ID never bypasses normal authorization.
-
----
-
----
-
-### Import Resume Discovery
-
-The canonical Job URI returned in `Location` is sufficient to re-read a known Job.
-
-This document does not invent a separate "recent Imports" endpoint or browser-persistence mechanism for rediscovering a Job if the client loses the Job ID/URI entirely.
-
-If product UX requires cross-device or post-storage-loss Job discovery, that requirement must be defined explicitly rather than assumed here.
-
----
-
----
-
-### Preview Does Not Mutate the Live Library
-
-The user-visible Preview is based on staging.
+## 14.6 Preview does not mutate the live library
 
 Before explicit confirmation:
 
@@ -3059,179 +1200,49 @@ Processing
 Preview
 ```
 
-must not cause approved staged entries to appear in the live library merely because they were parsed or matched.
+must not apply staged entries to the user's live Tracking library.
 
-Closing or cancelling before confirmation leaves the live Tracking library unchanged according to the approved Import workflow.
-
----
+That separation is one of the main safety properties of Smart Staging Import.
 
 ---
 
-### Confirm Is Retry-Safe
+## 14.7 Confirm is retry-safe
 
-Confirm initiates a durable, idempotent commit workflow.
+A lost network response after Confirm does not prove the operation failed.
 
-The client must not assume:
-
-```text
-network response lost
-    ->
-confirm definitely failed
-```
-
-The correct behavior is to re-read the durable Job state and follow the endpoint's Idempotency-Key semantics for retrying the same logical operation where required.
-
-The client must not create duplicate Import effects by issuing a new semantic confirmation blindly after an ambiguous network failure.
+The client should re-read Job state and reuse the endpoint's idempotency semantics rather than blindly creating a second logical confirmation.
 
 ---
 
----
+# 15. Shared backend states across screens
 
-### Import Polling and Failure Semantics
-
-The client must distinguish:
-
-```text
-Polling request failed temporarily
-```
-
-from:
-
-```text
-Job.state = failed
-```
-
-and from:
-
-```text
-Job.state = cancelled
-```
-
-and from:
-
-```text
-Job.state = partiallyCompleted
-```
-
-A transient inability to GET the Job does not change the durable Job state.
-
-The client retries according to the normal network/request policy once connectivity returns.
-
-No WebSocket fallback is introduced.
+Different screens should interpret common backend conditions consistently.
 
 ---
 
----
+## 15.1 Empty is success
 
-## 12. Cross-Screen Backend States — STEP 9.6
-
-### 16.1 Purpose
-
-Different screens have different business semantics, but they should share predictable backend-state behavior.
-
-The client should not have to invent a new interpretation of:
-
-```text
-Empty
-Not Found
-Unauthorized
-Unavailable
-Degraded
-Stale
-Offline
-```
-
-for every screen.
-
-This section defines the backend-facing meaning of those states.
-
----
-
----
-
-### Empty State Is a Successful State
-
-#### 17.1 Collection Rule
-
-An existing collection resource with zero matching entries returns a successful empty collection.
-
-Conceptually:
+An existing collection with no results returns:
 
 ```http
 200 OK
 ```
 
-```json
-{
-  "items": [],
-  "nextCursor": null,
-  "hasMore": false
-}
-```
+with an empty collection.
 
-It does not return:
+Examples:
 
-```http
-500 Internal Server Error
-```
+- new user's empty Library
+- Search with zero matches
+- public profile with zero public lists when Tracking is healthy
 
-and does not normally return:
-
-```http
-404 Not Found
-```
-
-merely because the collection is empty.
+Empty is not `404` and not `500`.
 
 ---
 
-#### 17.2 New User Library
+## 15.2 Empty is not unavailable
 
-A newly registered authenticated user may legitimately have:
-
-```text
-0 tracked works
-```
-
-The Library endpoint must represent that as an empty successful collection.
-
-The backend does not manufacture an error merely because no library entries exist.
-
----
-
-#### 17.3 Public Profile With No Public Tracking Entries
-
-If:
-
-```text
-Identity confirms profile is Public
-Tracking is healthy
-user has zero authorized public list/tracking entries
-```
-
-the composed profile is still a valid successful representation.
-
-Tracking-owned collection sections may contain empty arrays/collections according to the endpoint contract.
-
-Conceptually:
-
-```json
-{
-  "publicLists": []
-}
-```
-
-where that field is part of the final representation.
-
-This is not a server error.
-
----
-
----
-
-### Empty Is Not the Same as Unavailable
-
-The client must never collapse:
+These are different:
 
 ```text
 Tracking returned []
@@ -3243,1242 +1254,430 @@ and:
 Tracking could not be reached
 ```
 
-into the same state.
+The first is valid empty data.
 
-Example:
+The second is a degraded/failure state.
 
-```text
-Public profile
-Identity = Public
-Tracking = healthy
-Public lists = []
-```
-
-means:
-
-```text
-There are no authorized public lists.
-```
-
-But:
-
-```text
-Identity = Public
-Tracking = unavailable
-```
-
-means:
-
-```text
-Degraded profile.
-Tracking sections unavailable/omitted.
-```
-
-The Public Profile requirements already established that degraded Tracking failure must not be fabricated as an empty list.
+The client should never turn dependency failure into fake empty content.
 
 ---
 
----
-
-### Single-Resource Not Found Remains `404`
-
-The empty-collection rule does not redefine single-resource semantics.
+## 15.3 Singular resources still use `404`
 
 Examples:
 
-```text
-unknown Catalog Item
-    -> 404
+- unknown Catalog Item
+- non-addressable public profile
+- privacy-protected private public-profile lookup
 
-non-addressable Public Profile
-    -> 404
-
-privacy-sensitive Private public-profile lookup
-    -> 404
-```
-
-A collection containing zero items and a nonexistent singular resource are different contracts.
+A missing singular resource and an empty collection are different contracts.
 
 ---
 
----
+## 15.4 Loading is client state
 
-### Loading Is a Client State, Not a Backend Business State
+The backend does not persist a generic “loading” state just because a request is in flight.
 
-The backend returns:
-
-```text
-response
-error
-durable asynchronous Job state
-```
-
-It does not persist a generic "Loading" domain state merely because the UI is waiting on a request.
-
-The client may represent request-in-flight state locally.
-
-For long-running business work such as Import, durable Job states replace indefinite Loading.
+For long-running workflows such as Import, durable Job states replace indefinite loading.
 
 ---
 
+## 15.5 Network offline is different from backend failure
+
+A device may be:
+
+- offline
+- online while Shiori returns an error
+- online while Shiori returns a degraded success
+- online using reusable cached public data
+
+Those states should not be collapsed.
+
+Offline fallback is primarily a client capability.
+
 ---
 
-### Degraded State Must Be Truthful
+## 15.6 Error contract
 
-A degraded response is permitted only when the owning architecture explicitly defines a safe partial behavior.
+Shiori uses RFC 9457 Problem Details with stable machine-readable codes.
 
-Example already accepted:
+The client should use:
 
 ```text
-Public Profile
-Identity = Public
-Tracking unavailable
-    ->
-200 degraded Identity-only representation
+HTTP status
+error code
+trace/correlation context
 ```
 
-The client must not invent degraded success when the backend contract requires failure.
+rather than parsing human-language error strings.
+
+---
+
+## 15.7 Common state table
+
+| Situation | Contract |
+|---|---|
+| Empty collection | `200` + empty result |
+| Singular resource missing | `404` |
+| Not authenticated | `401` |
+| Authenticated but not allowed | `403` |
+| Domain conflict | `409` |
+| Stale ETag | `412` |
+| Async work accepted | `202` + durable Job |
+| Job exists but workflow failed | `200` Job read + failed state |
+| Safe degraded response exists | successful degraded representation |
+| Privacy authority unknown | fail closed |
+| Device offline | client-side offline handling |
+| Backend cannot safely fulfill request | Problem Details / failure |
+
+---
+
+# 16. HTTP caching and compression
+
+## 16.1 Cache semantics should be explicit
+
+Cache-eligible GET responses should declare explicit HTTP cache behavior.
+
+Universal Catalog data is a natural cache candidate.
+
+Personalized Tracking/Settings/Import data must not accidentally become public shared-cache content.
+
+Exact TTLs and directives remain endpoint/implementation decisions.
+
+---
+
+## 16.2 Caching does not override privacy
+
+A cache hit is an optimization, not authorization.
+
+A cached Public Profile cannot override a later Identity visibility change.
+
+---
+
+## 16.3 Compression
+
+Eligible API responses should use normal HTTP compression negotiation where beneficial.
+
+The order of priorities is:
+
+```text
+compact DTO
++ pagination/batching
++ compression
+```
+
+not:
+
+```text
+huge payload
++ compression
+```
+
+No compression algorithm or level is frozen here.
+
+---
+
+# 17. Mobile-friendly API behavior
+
+“Mobile-first” here means the backend behaves well under:
+
+- variable latency
+- limited bandwidth
+- retries
+- lost responses
+- several devices
+- future PWA sync
+
+It is not a visual-layout requirement.
+
+---
+
+## 17.1 Compact DTOs
+
+Public responses expose use-case data rather than:
+
+- EF entities
+- MongoDB documents
+- provider DTOs
+- internal aggregate graphs
+- every field “just in case”
+
+---
+
+## 17.2 Pagination
+
+A mobile client should never need to download thousands of library rows before becoming usable.
+
+---
+
+## 17.3 Batch reads
+
+For a known bounded set of IDs, one batch read is preferable to many identical per-item requests.
 
 Example:
 
 ```text
-Identity privacy authority unavailable
-    ->
-Fail Closed
+20 visible IDs
+-> 1 bounded batch request
 ```
 
 not:
 
 ```text
-show stale Tracking profile anyway
-```
-
----
-
----
-
-### Network Failure Is Different From Backend Failure
-
-A user may experience:
-
-```text
-A. Device has no network connectivity.
-
-B. Device can reach Shiori, but a Shiori capability returns an error.
-
-C. Shiori returns a successful degraded representation.
-
-D. Shiori returns cached/revalidated public data.
-```
-
-These conditions must remain distinguishable.
-
-The backend cannot produce a new network response while the device is completely offline.
-
-Offline fallback is therefore primarily a client capability.
-
-The backend's responsibility is to make its reachable responses:
-
-- Bounded.
-- Fast according to the accepted NFR class.
-- Cache-describable where safe.
-- Stable.
-- Efficient to synchronize.
-
----
-
----
-
-### Bounded Server Waiting
-
-Shiori must not leave ordinary client requests hanging indefinitely while waiting for:
-
-- AniList.
-- MangaDex.
-- RabbitMQ consumers.
-- A long-running Import.
-- Another background workflow.
-
-Normal local reads use Shiori-owned state.
-
-Long-running work uses durable Jobs.
-
-Provider calls use bounded resilience policies.
-
-This prevents a mobile/PWA client from being trapped behind a server request whose backend dependency is intentionally asynchronous or unavailable.
-
-Exact client-side timeout values are not defined in this document.
-
----
-
----
-
-### Stable Error Contracts Across Screens
-
-All service errors continue to use RFC 9457 Problem Details with stable machine-readable error codes.
-
-The client must not parse human-language error text to determine behavior.
-
-Conceptually:
-
-```text
-status
-code
-trace/correlation context
-```
-
-drive programmatic error handling.
-
-Human-readable detail remains presentation text, not a stable machine protocol.
-
----
-
----
-
-### Global Backend State Matrix
-
-| Backend situation | Expected client-facing contract |
-|---|---|
-| Valid collection has no entries | `200` + empty collection |
-| Singular resource does not exist | `404` |
-| Privacy-sensitive public resource is not addressable | `404` where approved |
-| User is not authenticated | `401` |
-| User is authenticated but unauthorized | `403` |
-| Domain conflict | `409` |
-| Stale ETag / failed `If-Match` | `412` |
-| Long-running work accepted | `202` + durable Job |
-| Job exists but workflow failed | `200` Job read + `state=failed` |
-| Safe partial response is explicitly supported | Successful degraded representation |
-| Privacy authority cannot be established | Fail Closed |
-| Device is offline | No new server response; client-side offline handling |
-| Backend/dependency cannot safely fulfill contract | Standard failure / Problem Details |
-
----
-
----
-
-### Screen-Specific Error and State Handling Summary
-
-#### My Library
-
-Must distinguish:
-
-```text
-successful page
-empty collection
-more pages available
-no more pages
-invalid cursor/query
-service unavailable
-```
-
-No "load everything" fallback is allowed.
-
----
-
-#### Detailed Progress Editor
-
-Must distinguish:
-
-```text
-current representation
-validation failure
-domain conflict
-stale revision / 412
-authorization failure
-service failure
-```
-
-The client preserves attempted local state across a `412` while re-fetching the current server representation.
-
----
-
-#### Progress Vault
-
-Must distinguish:
-
-```text
-canUndo = true
-canUndo = false
-Undo succeeds
-Undo rejected because state changed
-Tracking unavailable
-```
-
-The client never fabricates an Undo target.
-
----
-
-#### Public Profile
-
-Must distinguish:
-
-```text
-full profile
-degraded Identity-only profile
-private/non-addressable profile
-fail-closed dependency failure
-```
-
-Tracking failure after confirmed Public eligibility is not equivalent to Identity failure.
-
----
-
-#### Settings
-
-Must distinguish which service owns the failed capability.
-
-One service must never act as fallback authority for another service's data.
-
----
-
----
-
-## 13. HTTP Caching & Compression
-
----
-
-### `Cache-Control` Is Part of the HTTP UX Contract
-
-#### 24.1 Explicit Cache Metadata
-
-Cache-eligible GET responses must publish explicit HTTP cache semantics rather than relying on accidental browser defaults.
-
-The server uses:
-
-```http
-Cache-Control: ...
-```
-
-according to the sensitivity and freshness requirements of the endpoint.
-
-This allows clients, browsers, intermediaries, and a future PWA to reason about whether a representation may be reused.
-
----
-
-#### 24.2 Public / Universal Data
-
-Universal Catalog representations are natural cache candidates when safe.
-
-Examples include:
-
-```text
-Catalog Item metadata
-Franchise metadata
-Search/discovery data where endpoint semantics permit caching
-```
-
-The exact `max-age`, shared-cache policy, validation strategy, or stale policy is not invented in this document.
-
-The requirement is:
-
-> **Cacheability is explicit and contract-aware.**
-
----
-
-#### 24.3 Personalized / Private Data
-
-Authenticated user-specific data must not be accidentally treated as universal shared-cache content.
-
-Examples include:
-
-```text
-My Library
-Current progress
-Private Settings
-User-specific Tracking state
-Import Job state
-```
-
-The endpoint's `Cache-Control` policy must preserve privacy and freshness requirements.
-
-This document does not invent one universal directive for every authenticated endpoint.
-
-It establishes that a personalized response must never become publicly reusable merely because a generic cache layer exists.
-
----
-
-#### 24.4 Sensitive Identity Responses
-
-Security-sensitive Identity/token responses require endpoint-specific restrictive cache behavior.
-
-The exact directives remain governed by the Identity/API security implementation and are not invented here.
-
----
-
----
-
-### Cache-Control Does Not Implement Offline Mode by Itself
-
-`Cache-Control` tells HTTP clients/caches how a reachable response may be reused.
-
-It does not create a Phase 2 offline architecture automatically.
-
-A future PWA may maintain client-controlled local snapshots of approved data.
-
-That client behavior is separate from server ownership and must respect:
-
-- Authentication.
-- Logout cleanup.
-- Sensitive-data handling.
-- Cache invalidation.
-- Multi-account safety.
-
-Those Phase 2 implementation decisions remain deferred.
-
----
-
----
-
-### Response Compression
-
-#### 26.1 Requirement
-
-Shiori should support standard HTTP response compression for eligible textual/API payloads so mobile clients do not transfer unnecessary bytes.
-
-The architecture requirement is:
-
-```text
-bounded DTO
-+
-pagination/batching
-+
-HTTP response compression
-```
-
-not:
-
-```text
-send oversized payload
-and expect compression to solve it
-```
-
-Compression is an optimization after payload discipline.
-
----
-
-#### 26.2 No Compression Algorithm Is Frozen Here
-
-This document does not select:
-
-```text
-gzip
-Brotli
-compression level
-minimum compression threshold
-```
-
-as a permanent application contract.
-
-The implementation may negotiate supported standard HTTP encodings at the Gateway/server boundary.
-
-The exact operational policy should be measured and configured without changing business DTO semantics.
-
----
-
-#### 26.3 Already-Compressed / Unsuitable Content
-
-Response compression must be applied where beneficial.
-
-This document does not require blindly recompressing every binary asset or response type.
-
-The key backend-UX requirement is to reduce transfer cost without creating unnecessary CPU or latency cost.
-
----
-
----
-
-## 14. Mobile-First API Requirements — STEP 9.6
-
-### 29.1 Mobile-Friendly Is a Backend Contract Property
-
-"Mobile-first" in this document does not mean a particular responsive layout.
-
-It means public APIs are designed for:
-
-```text
-variable latency
-limited bandwidth
-lost responses
-retries
-small screens consuming only needed data
-multiple devices
-future PWA synchronization
-```
-
-The API must remain efficient even when the client is not on a fast desktop network.
-
----
-
----
-
-### Compact DTOs
-
-Responses are defined by use case.
-
-They must not expose:
-
-- EF Core entities.
-- MongoDB documents.
-- Internal domain graphs.
-- Provider DTOs.
-- Every available field "just in case."
-
-Examples of the accepted separation:
-
-```text
-Tracking response
-    -> Tracking/progress identifiers and state
-
-Catalog response
-    -> titles/images/media metadata and bounded subsets
-```
-
-This prevents payload growth from becoming accidental coupling.
-
----
-
----
-
-### Pagination Prevents Giant Transfers
-
-Potentially unbounded collections use cursor pagination.
-
-A mobile client must never be required to load:
-
-```text
-4,000 library items
-```
-
-before showing meaningful content.
-
-The accepted collection limits and cursor rules remain governed by `API_CONVENTIONS.md`.
-
----
-
----
-
-### Batch Reads Prevent 20 Round-Trips
-
-When a client needs the same bounded resource shape for a known set of IDs, batch reads are preferred over one request per item where the endpoint is approved.
-
-Conceptually:
-
-```text
-Bad:
 20 visible cards
-    ->
-20 separate same-purpose backend requests
-
-Preferred:
-20 identifiers
-    ->
-1 bounded batch request
-    ->
-20 compact results
+-> 20 same-purpose requests
 ```
 
-Batching does not authorize:
-
-```text
-unlimited IDs
-unlimited payload size
-arbitrary cross-domain mega response
-```
-
-The batch remains bounded and use-case-specific.
+Batch APIs remain bounded and use-case specific.
 
 ---
 
----
+## 17.4 Incremental synchronization
 
-### Incremental Synchronization Prevents Full Re-downloads
-
-Mobile/PWA clients may synchronize changes using opaque synchronization tokens where the endpoint supports that contract.
+Where supported, a client may synchronize using opaque tokens.
 
 Conceptually:
 
 ```text
-Client has snapshot + sync token
-        |
-        v
-GET changes since token
-        |
-        v
-changed
-deleted
-nextToken
-hasMore
+snapshot + token
+-> changes since token
+-> changed/deleted
+-> next token
 ```
 
-The client treats synchronization tokens as opaque.
+The token is not:
 
-It does not:
+- decoded by the client
+- incremented manually
+- an authorization token
+- a RabbitMQ offset
 
-- decode them;
-- increment them;
-- use them as authorization;
-- treat them as RabbitMQ offsets.
-
-Incremental synchronization is state convergence.
-
-It is not Event Sourcing.
+Incremental sync is state convergence, not Event Sourcing.
 
 ---
 
+## 17.5 Retry-safe mutations
+
+Mobile networks can lose responses after the server already committed.
+
+Retry-sensitive mutations therefore use `Idempotency-Key` where required.
+
+This prevents one logical user action from being applied twice because a response disappeared in transit.
+
 ---
 
-### Retry-Safe Mutations
+# 18. Phase 2 PWA compatibility
 
-Unreliable mobile networks can lose responses even after a server mutation succeeds.
+Installable PWA with read-only offline mode is Phase 2 scope.
 
-For retry-sensitive mutations, Shiori uses:
+The backend should remain compatible with it without building the feature in the MVP.
+
+Approved offline direction:
 
 ```text
-Idempotency-Key
+offline read:
+profile
+library
+statistics
+
+offline progress write:
+not approved
 ```
 
-A retry of the same logical mutation with the same key must not apply the business effect twice according to the accepted idempotency contract.
+---
 
-This is essential for actions such as progress mutation and other retry-sensitive writes.
+## 18.1 Same public APIs
+
+The PWA uses the same platform-neutral API family.
+
+It does not gain:
+
+- direct PostgreSQL
+- direct MongoDB
+- RabbitMQ
+- a duplicate backend domain
+
+Useful existing primitives include:
+
+- compact DTOs
+- cursor pagination
+- batch reads
+- incremental sync
+- stable IDs
+- versioned contracts
 
 ---
 
----
+## 18.2 Client-owned offline cache
 
-### Stable API Semantics
-
-The future PWA and other clients consume the same versioned Shiori public APIs.
-
-Therefore responses must remain stable in meaning across compatible releases.
-
-The accepted evolution model is:
+Future local offline data is a client cache:
 
 ```text
-additive backward-compatible changes
-    -> remain in /api/v1
-
-breaking semantic changes
-    -> explicit compatibility review / future major version
+Shiori canonical backend
+-> sync/read API
+-> PWA local snapshot
 ```
 
-The server must not silently reinterpret an existing field because one frontend changed its visual design.
+It is not a new source of truth.
+
+The cache may be stale while offline and reconciles later.
 
 ---
 
----
+## 18.3 No offline mutation queue yet
 
-### Safe / Idempotent Reads
+Because the approved offline scope is read-only, this document does not create:
 
-Normal `GET` operations are safe from a business-state perspective.
+- offline progress queues
+- client-side conflict merging
+- delayed offline writes
+- offline ETag reconciliation
 
-Repeated reads of the same stable resource contract must not intentionally mutate domain state.
-
-Technical effects such as:
-
-```text
-logging
-metrics
-tracing
-cache activity
-```
-
-do not turn a GET into a business mutation.
-
-This property is important for:
-
-- browser caching;
-- PWA synchronization;
-- polling;
-- mobile retries.
+Those require a future product/architecture decision.
 
 ---
 
----
+## 18.4 Privacy details remain future work
 
-### Mobile Response Compression
+Future PWA work still needs decisions around:
 
-Eligible API responses should participate in standard HTTP response compression negotiation.
+- logout cache wipe
+- shared device behavior
+- multi-account isolation
+- offline retention
+- secure local storage
+- image caching
+- stale-data indicators
 
-Compression reduces transferred bytes but does not replace:
-
-- compact DTOs;
-- pagination;
-- batch reads;
-- incremental sync.
-
-The backend must optimize the shape first, then compress the eligible representation.
-
----
+Those are not MVP backend requirements.
 
 ---
 
-## 15. Phase 2 PWA Compatibility
+# 19. Cross-screen guardrails
 
-### 38.1 Product Status
+The backend-facing UX rules across Shiori reduce to a few practical constraints:
 
-Installable PWA with read-only offline mode is:
-
-```text
-Phase 2 Approved
-```
-
-It is not an MVP implementation requirement.
-
-The current backend must preserve the existing extension points that make it additive later.
-
----
-
-### 38.2 Approved Offline Scope
-
-The Phase 2 PWA is expected to support read-only offline access to the most recently synchronized:
-
-```text
-User profile
-Library
-Statistics
-```
-
-Offline mutation of progress is not currently approved.
-
-Writes require connectivity.
-
-This distinction is normative:
-
-```text
-Phase 2 offline READ
-    -> approved
-
-Phase 2 offline WRITE / conflict merge
-    -> not approved
-```
+1. Request count should not grow linearly with rendered items.
+2. Responses should be bounded and use-case specific.
+3. Large collections are paginated.
+4. Universal Catalog data and personal Tracking state remain distinct.
+5. Tracking critical paths use local projections where approved.
+6. The client never guesses chapter arithmetic or Undo state.
+7. ETag / `If-Match` protects concurrent Tracking edits.
+8. Retry-sensitive mutations use idempotency protection.
+9. Long-running work uses durable Jobs, not long-lived requests.
+10. Empty, degraded, unavailable, offline, and not-found states remain different.
+11. Caching never bypasses authorization/privacy.
+12. Mobile/PWA clients use the same stable public APIs.
 
 ---
 
----
+# 20. Performance mapping
 
-### PWA Uses Existing Public APIs
+## Continue
 
-The PWA does not receive:
+Latency-sensitive Tracking read using local state and local Catalog projections.
 
-- direct PostgreSQL access;
-- direct MongoDB access;
-- RabbitMQ access;
-- a separate duplicated business domain.
-
-It consumes the same platform-neutral public API family used by other Shiori clients.
-
-The current API direction already provides useful primitives:
-
-```text
-compact DTOs
-cursor pagination
-batch reads
-incremental synchronization
-stable Shiori identifiers
-versioned contracts
-```
+Quick `[+1]` inherits the transactional-write SLO.
 
 ---
 
----
+## Search / Discovery
 
-### PWA Local Cache Is Client-Owned
+Catalog Search and Detail are Fast Local Reads.
 
-When Phase 2 is implemented, the PWA may retain local read-only snapshots of approved user data.
+Autocomplete, if approved, uses the same local/indexed direction.
 
-That local cache is not a new Shiori backend source of truth.
-
-Conceptually:
-
-```text
-Shiori backend canonical state
-        |
-        v
-synchronization/read API
-        |
-        v
-PWA local read cache
-```
-
-The client cache may become stale while offline.
-
-It must reconcile with server state when connectivity returns according to the future PWA design.
+No live provider call belongs in the normal request path.
 
 ---
 
----
+## Catalog Item Detail
 
-### No Offline Mutation Queue Is Introduced
+Catalog metadata is one local Catalog read.
 
-Because the approved PWA scope is read-only offline:
+Personal Tracking state is a separate authenticated local read.
 
-```text
-offline
-    ->
-read cached snapshot
-
-offline progress mutation
-    ->
-not part of current approved Phase 2 scope
-```
-
-This document does not create:
-
-- offline mutation queues;
-- client-side conflict resolution;
-- delayed progress writes;
-- offline ETag merge logic.
-
-Those would require a future explicit product/architecture decision.
+Tracking failure should not destroy the Catalog portion.
 
 ---
 
----
-
-### PWA Privacy Boundary
-
-Offline data persists on a user-controlled device.
-
-The current architecture only preserves the ability to build the feature later.
-
-It does not decide the Phase 2 policies for:
-
-```text
-logout cache wipe
-shared-device behavior
-multi-account cache isolation
-offline retention duration
-sensitive local storage
-cover-image caching
-stale-data indicators
-```
-
-These remain future client/offline architecture questions.
-
-No backend MVP implementation should pretend those decisions are already solved.
-
----
-
----
-
-### PWA and `Cache-Control`
-
-HTTP cache metadata helps the future PWA make safe decisions about reusable network representations.
-
-However:
-
-```text
-Cache-Control
-    !=
-PWA offline database
-```
-
-The future PWA's durable/offline snapshot behavior remains client-owned.
-
-The server's responsibility now is:
-
-- explicit cache semantics where safe;
-- stable DTOs;
-- bounded reads;
-- efficient synchronization;
-- privacy-correct responses.
-
----
-
----
-
-### PWA and Import
-
-Smart Staging Import remains an online server workflow.
-
-A future installed PWA may start or observe Import while online using the same durable Job APIs.
-
-This document does not approve:
-
-```text
-offline file import
-offline Import confirmation
-background browser-side XML parsing as Shiori authority
-```
-
-Import remains Tracking-owned server workflow.
-
----
-
----
-
-## 16. Cross-Screen Guardrails
-
----
-
-### Cross-Screen Round-Trip Guardrail
-
-A normal screen must not depend on unbounded per-item HTTP fan-out.
-
-The preferred toolbox is:
-
-```text
-purpose-built bounded read models
-cursor pagination
-batch reads
-local service projections
-incremental synchronization
-safe cache reuse
-```
-
-Not:
-
-```text
-1 screen
-    ->
-20 to 50 mandatory same-purpose API calls
-```
-
-This does not establish a universal "one request per screen" rule.
-
-Some screens legitimately compose a small bounded number of independent capabilities.
-
-The requirement is to avoid request count growing linearly with every rendered item.
-
----
-
----
-
-### Cross-Screen Payload Guardrail
-
-Every endpoint must return only what its contract needs.
-
-The client must not require a giant "application bootstrap" response containing:
-
-```text
-entire profile
-entire library
-entire Catalog
-all settings
-all publication units
-all characters
-all history
-all imports
-```
-
-in one payload.
-
-Likewise, the backend must not force clients into extreme fragmentation.
-
-The target is:
-
-```text
-bounded
-use-case-specific
-cache-aware
-batch-capable
-paginated where needed
-```
-
----
-
----
-
-### Cross-Screen Network Retry Guardrail
-
-A transient network failure must not automatically become duplicate business effects.
-
-Rules already established across Shiori apply:
-
-```text
-GET
-    -> safe read retry semantics
-
-retry-sensitive mutation
-    -> Idempotency-Key
-
-concurrency-sensitive mutation
-    -> ETag / If-Match
-
-long-running workflow
-    -> durable Job + poll current state
-```
-
-The frontend must use the correct mechanism rather than inventing generic "retry everything" behavior.
-
----
-
----
-
-### Cross-Screen Cache Safety Guardrail
-
-Caching must never bypass:
-
-```text
-authentication
-authorization
-profile visibility
-list privacy
-resource ownership
-```
-
-A cache hit is an optimization.
-
-It is not authority.
-
-For privacy-sensitive compositions, current server-side policy remains authoritative.
-
----
-
----
-
-### Cross-Screen Backend State Principles
-
-The following semantic distinctions are mandatory:
-
-```text
-EMPTY
-    != ERROR
-
-NOT FOUND
-    != EMPTY COLLECTION
-
-DEGRADED
-    != FULL SUCCESS
-
-NETWORK OFFLINE
-    != SERVER 500
-
-JOB FAILED
-    != HTTP GET JOB FAILED
-
-TRACKING UNAVAILABLE
-    != USER HAS NO TRACKING DATA
-
-STALE LOCAL CLIENT CACHE
-    != CANONICAL SERVER STATE
-```
-
-Preserving these distinctions prevents the frontend from hiding real backend conditions behind misleading UX.
-
----
-
----
-
-## 17. Performance Mapping
-
-The three surfaces in this document map to already accepted workload characteristics.
-
-### Continue
-
-Continue is a latency-sensitive Tracking read using local Tracking state and local Catalog projections.
-
-The critical rule is:
-
-```text
-no synchronous Catalog/provider dependency
-for release/progress evaluation
-```
-
-Quick `[+1]` is a transactional Tracking mutation and inherits the existing transactional-write SLOs.
-
----
-
-### Search / Discovery
-
-Catalog Search and Catalog Item reads are already classified as read-heavy, latency-sensitive, indexed local reads.
-
-They inherit the accepted Fast Local Read performance budgets.
-
-Autocomplete, if approved, must follow the same local/indexed architecture and must not introduce a live provider dependency.
-
-No new Autocomplete-specific numeric SLO is created in this document.
-
----
-
-### Catalog Item Detail
-
-The universal Catalog portion is a normal local Catalog read.
-
-The personal Tracking portion is a separate authenticated local read.
-
-The client experience must remain bounded and must not expand into N per-item requests.
-
-If Tracking is slow or unavailable, Catalog metadata remains independently usable when Catalog itself is healthy.
-
----
-
----
-
-## 18. Decisions Intentionally Deferred
-
-The following values remain deliberately unresolved because the approved source documents do not yet fix them. They must be decided explicitly at the appropriate contract, implementation, or later product-design stage rather than inferred from frontend convenience.
-
-### Home / Search / Catalog Detail
-
-```text
-Continue maximum visible item count
-Continue pagination strategy
-Continue presentation-metadata field set
-Autocomplete maximum suggestion count
-Autocomplete minimum query length
-Autocomplete debounce interval
-Autocomplete cache TTL
-Full Search endpoint-specific page-size overrides, if any
-Exact supported Search filters
-Exact supported Search sort combinations
-Catalog Detail cache TTL
-Exact Catalog Detail lazy-loading boundaries
-Final HTTP endpoint names for Continue
-Final HTTP endpoint name for Autocomplete
-Final HTTP endpoint for personal Tracking state by CatalogItemId
-```
+# 21. Decisions intentionally left open
+
+These remain implementation or later product decisions rather than things this UX document should guess.
+
+### Continue / Search / Catalog Detail
+
+- Continue maximum visible count
+- Continue pagination strategy
+- final Continue presentation fields
+- Autocomplete suggestion count
+- minimum query length
+- debounce interval
+- cache TTL
+- exact Search filter set
+- exact Search sort combinations
+- Catalog Detail cache TTL
+- final endpoint names
 
 ### Library / Progress / Profile / Settings
 
-```text
-Exact final Library endpoint route
-Exact complete Library filter list
-Exact Library sort list
-Whether Library card Catalog metadata uses batch read
-or an explicitly expanded compact projection
-Exact cache policy for Library
-Exact Detailed Progress Editor endpoint route
-Exact Problem Details localization copy
-Exact visual conflict-resolution interaction
-Exact Undo response DTO name
-Exact field name for previousState beyond the required semantics
-Exact profile degraded-state indicator field
-Exact profile cache TTL
-Exact Settings endpoint grouping
-Exact Settings request batching
-Exact UI navigation labels
-```
+- complete Library filter/sort list
+- exact batch-vs-projection choice for Library card metadata
+- exact editor/Undo endpoint routes
+- visual conflict-resolution interaction
+- exact degraded-profile indicator field
+- profile cache policy
+- exact Settings grouping/navigation
 
-### Import / Caching / Mobile / PWA
+### Import / Mobile / PWA
 
-```text
-Import polling interval
-Import polling backoff algorithm
-Exact UI copy for Import states
-Exact Import confirmation endpoint route
-Cross-device Import Job rediscovery endpoint
-Exact Cache-Control max-age values
-Exact shared-cache directives per endpoint
-Exact authenticated/private cache directives per endpoint
-Response compression algorithm
-Compression level
-Compression minimum-size threshold
-Exact client network timeout
-Exact PWA offline retention duration
-Exact PWA local storage technology/schema
-Logout cache-wipe implementation
-Multi-account offline cache behavior
-Offline cover-image policy
-Stale-data visual indicators
-```
+- polling interval/backoff
+- cross-device import-job rediscovery
+- exact Cache-Control values
+- compression algorithm/settings
+- exact client timeout
+- PWA local storage technology
+- PWA offline retention
+- logout cache-wipe details
+- multi-account offline behavior
 
-No WebSocket decision is pending for MVP Import; WebSockets are not introduced by STEP 9.
+No WebSocket decision is pending for MVP Import; the MVP uses polling.
 
 ---
 
-## 19. Final Architecture / UX Invariants
+# 22. Current STEP 9 status
 
-The complete STEP 9 UX/backend contract preserves these core invariants:
+The source document still describes STEP 9 as awaiting final approval.
 
-1. No normal screen requires unbounded N+1 service calls.
-2. Tracking critical paths use local projections where already architecturally approved.
-3. Large collections are paginated.
-4. Search and Autocomplete remain semantically distinct.
-5. Catalog universal data remains separate from personal Tracking state.
-6. Degraded states preserve service fault isolation.
-7. Progress remains polymorphic.
-8. The client never guesses chapter arithmetic.
-9. ETag / `If-Match` protects concurrent Tracking mutations.
-10. Progress Vault restores exact server-owned history state.
-11. Public Profile remains Identity-first and Fail Closed.
-12. Settings does not create shared business ownership.
-13. Import is durable and asynchronous.
-14. Long-running business work is not represented by long-lived HTTP requests.
-15. Empty state is not treated as server failure.
-16. Degraded state is not fabricated as empty state.
-17. Network offline is a client connectivity state, not a fake backend status.
-18. Cache metadata is explicit and privacy-aware.
-19. Compression reduces transport cost but does not justify oversized payloads.
-20. Mobile clients receive bounded DTOs and bounded request counts.
-21. Batch and synchronization contracts reduce unnecessary round trips.
-22. Retry-sensitive mutations remain idempotency-protected.
-23. Phase 2 PWA evolution remains additive.
-24. Offline mutation remains out of scope.
-25. Backend contracts remain platform-neutral and stable.
+Its own checklist shows Parts 1 and 2 complete while Part 3/final consolidated approval remain unchecked.
+
+This humanized version preserves that source state rather than silently changing project history.
+
+The actual Architecture Freeze later records STEP 9 as complete, so the canonical source documents should eventually be synchronized through the documentation cleanup pass rather than through editorial rewriting.
 
 ---
 
----
+# 23. Final UX/backend principles
 
-## 20. STEP 9 Completion Gate
+The most important takeaways from STEP 9 are:
 
-Current consolidation status:
+> **The frontend should render backend truth, not reconstruct it.**
+
+That means:
 
 ```text
-[x] Part 1 — Home / Continue
-[x] Part 1 — Search / Discovery
-[x] Part 1 — Catalog Item Detail
-
-[x] Part 2 — My Library
-[x] Part 2 — Detailed Progress Editor
-[x] Part 2 — Concurrency / ETag UX
-[x] Part 2 — Progress Vault / Undo
-[x] Part 2 — Public Profile
-[x] Part 2 — Settings ownership
-
-[ ] Part 3 — Smart Staging Import
-[ ] Part 3 — Cross-screen backend states
-[ ] Part 3 — Mobile-first / PWA compatibility
-
-[ ] Final consolidated WEB_UX.md accepted
+Continue ordering -> Tracking
+Quick +1 safety -> Tracking
+Search relevance -> Catalog
+Library pagination -> Tracking
+Concurrency -> Tracking revision/ETag
+Undo target -> Tracking history
+Public-profile eligibility -> Identity
+Public Tracking sections -> Tracking
+Import state -> durable Tracking Job
 ```
 
-Parts 1 and 2 are already approved.
+The client can still provide a responsive and polished experience, but it should not become a second implementation of Shiori's domain rules.
 
-Part 3 and the final consolidated document remain pending explicit approval. Once that approval is given and no contradiction is found against the accepted ADR, System Design, API, Event, Privacy, Future Stress Test, or NFR documents, STEP 9 may be marked:
-
-```text
-[x] STEP 9 — Backend-Oriented Web UX
-```
-
----
-
-## 21. Source Basis
-
-### `FEATURES.md`
-
-Provides approved product behavior for Catalog discovery, work-focused Search, Catalog Item pages, polymorphic Tracking, Release Intelligence, Manual Track Mode, Continue, Progress Vault, Shareable Profile, Smart Staging Import, and Phase 1 data portability.
-
-### `ROADMAP.md`
-
-Provides implementation sequencing and engineering requirements for indexed Search, local Catalog projections, Tracking, cursor pagination, Imports, Continue ordering, context-aware quick updates, and end-to-end validation.
-
-### `ADR.md`
-
-Provides the accepted boundaries for Database-per-Service, local Catalog projections, OpenIddict, RabbitMQ, YARP, platform-neutral APIs, background Imports, internal microservice architecture, and ADR-013 Profile BFF / privacy composition.
-
-### `SYSTEM_DESIGN.md`
-
-Provides runtime ownership, local-read paths, provider isolation, Tracking projections, authentication, profile composition, failure isolation, Import flow, and degraded modes.
-
-### `API_CONVENTIONS.md`
-
-Provides `/api/v1` compatibility rules, resource-oriented HTTP contracts, cursor pagination, filtering/sorting/search rules, polymorphic progress DTOs, ETag / `If-Match`, `412 Precondition Failed`, Idempotency-Key, RFC 9457 Problem Details, durable Job semantics, batch reads, and incremental synchronization.
-
-### `EVENT_CONTRACTS.md`
-
-Provides the versioned asynchronous contracts that keep Tracking projections convergent and support durable cross-service workflows without exposing internal persistence models.
-
-### `NON_FUNCTIONAL_REQUIREMENTS.md`
-
-Provides measurable latency classes, capability-based availability/degradation, resilience requirements, bounded waiting, Import acceptance behavior, messaging health, and mobile-sensitive operational constraints.
-
-### `PRODUCT_HORIZON.md`
-
-Provides Search Autocomplete as an MVP Candidate and preserves the approved Phase 2 installable PWA with read-only offline access without expanding MVP scope.
-
-### `FUTURE_STRESS_TEST.md`
-
-Provides future-compatibility constraints for historical integrity, Undo/history semantics, privacy evolution, stable identity, and additive future development.
+That is the main backend-facing UX contract this document is meant to protect.
