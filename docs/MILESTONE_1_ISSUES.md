@@ -1,0 +1,1140 @@
+# Shiori — Milestone 1 GitHub Issues
+
+**Milestone:** Foundation, Delivery Pipeline & Identity  
+**Scope in this file:** M1-001 through M1-017  
+**Status:** Parts 1–4 approved and consolidated  
+**Architecture baseline:** Shiori Architecture Freeze v1.0
+
+---
+
+## How to use this backlog
+
+These Issues translate the frozen architecture into implementation work. They are intentionally scoped so that each PR can be reviewed on one clear concern without weakening service boundaries or pulling later milestones forward.
+
+A few rules apply across the whole file:
+
+- Identity, Catalog, and Tracking remain separate bounded contexts.
+- Each service owns its own persistence.
+- YARP is infrastructure, not a business service.
+- OpenIddict owns standards-based token issuance inside Identity.
+- Catalog and Tracking validate Identity-issued access tokens independently.
+- No future service, Worker, shared production kernel, provider integration, or domain model is created before an approved Issue needs it.
+- Architecture Tests are blocking, not advisory.
+- Sensitive values never belong in Git or normal application logs.
+- Tests should prove the real boundary being changed rather than replacing it with an easier but misleading substitute.
+
+The dependency flow is roughly:
+
+```text
+M1-001
+  ├─> M1-002
+  ├─> M1-003
+  ├─> M1-004
+  └─> M1-005
+
+M1-004 + M1-005
+  └─> M1-006
+       └─> M1-007
+            ├─> M1-010
+            │    └─> M1-011
+            │         └─> M1-012
+            └─> M1-013
+
+M1-005
+  └─> M1-009
+       └─> M1-008
+            ├─> M1-011
+            └─> M1-014
+
+M1-014 + M1-016
+  └─> M1-015
+
+M1-008 + M1-009 + M1-011 + M1-014 + M1-016
+  └─> M1-017
+```
+
+This is a dependency guide, not a requirement that every Issue be completed strictly one at a time. Work can overlap when the dependency is stable and the PR remains independently reviewable.
+
+---
+
+# Foundation & Infrastructure
+
+## [M1-001] Establish final solution structure
+- **Objective:** Put the frozen service and layer boundaries into the solution before feature work starts, so the project graph itself reflects the architecture we intend to protect.
+- **Architecture References:**
+  - `ROADMAP.md` — Milestone 1 foundation.
+  - `ADR.md` — ADR-001 and ADR-012.
+  - `ARCHITECTURE_FREEZE.md` — approved production-project registry and dependency rules.
+- **Scope:**
+  - Establish the 13 approved production projects:
+    - `Shiori.Gateway`
+    - `Shiori.Identity.Api`
+    - `Shiori.Identity.Application`
+    - `Shiori.Identity.Domain`
+    - `Shiori.Identity.Infrastructure`
+    - `Shiori.Catalog.Api`
+    - `Shiori.Catalog.Application`
+    - `Shiori.Catalog.Domain`
+    - `Shiori.Catalog.Infrastructure`
+    - `Shiori.Tracking.Api`
+    - `Shiori.Tracking.Application`
+    - `Shiori.Tracking.Domain`
+    - `Shiori.Tracking.Infrastructure`
+  - Keep Identity, Catalog, and Tracking physically separated by bounded context.
+  - Apply the frozen dependency direction:
+    - Domain has no internal project references.
+    - Application references only its own Domain.
+    - Infrastructure references its own Application and Domain.
+    - Api references its own Application and Infrastructure.
+    - Api does not directly reference Domain.
+    - Gateway references no Identity, Catalog, or Tracking implementation project.
+  - Keep Gateway as one infrastructure-focused executable.
+  - Remove default template artifacts that imply behavior Shiori has not approved.
+  - Preserve Vertical Slice organization as the Application-layer direction without creating empty feature folders in advance.
+  - Keep the solution buildable while Catalog and Tracking remain shells.
+- **Out of Scope:**
+  - Identity behavior, OpenIddict, Registration, Login, or token flows.
+  - Catalog or Tracking domain implementation.
+  - Database schemas, migrations, MongoDB collections, or RabbitMQ contracts.
+  - Worker projects.
+  - Profile BFF implementation.
+  - Generic shared production assemblies such as `Shiori.Shared`, `Shiori.Common`, `Shiori.Core`, or a Shared Kernel.
+- **Dependencies:**
+  - None. This is the structural starting point for Milestone 1.
+- **Acceptance Criteria:**
+  - The solution contains exactly the 13 approved production projects.
+  - Identity, Catalog, and Tracking each contain Api, Application, Domain, and Infrastructure projects.
+  - Api projects are executable; the other three layers are class libraries.
+  - Project references match ADR-012 with no cross-service implementation references.
+  - Gateway has no business-service implementation reference.
+  - No unapproved Worker, shared production assembly, or extra production host is introduced.
+  - A clean checkout restores and builds successfully.
+- **Testing:**
+  - Restore and build the complete solution from a clean checkout.
+  - Inspect the project graph against the ADR-012 reference matrix.
+  - Verify there are no dependency cycles.
+  - Verify Gateway remains isolated from business-service implementation assemblies.
+  - Verify the build does not rely on machine-specific generated files or paths.
+- **Definition of Done:**
+  - The repository matches the frozen production-project structure.
+  - The solution builds cleanly with no broken references.
+  - No speculative project or cross-service dependency was added.
+  - Repository documentation that shows the source layout matches the final structure.
+  - M1-002 can encode the structure as a blocking architecture rule.
+
+## [M1-002] Add Architecture Tests baseline
+- **Objective:** Turn the frozen structural rules into executable tests that fail closed and block CI when the codebase drifts away from the accepted architecture.
+- **Architecture References:**
+  - `ADR.md` — ADR-012 Architecture Tests and project matrix.
+  - `ARCHITECTURE_FREEZE.md` — Milestone 1 Architecture Tests readiness.
+  - `ROADMAP.md` — Engineering Definition of Done.
+- **Scope:**
+  - Create one global `Shiori.ArchitectureTests` project under `tests/Architecture`.
+  - Use NetArchTest or an equivalent mechanism; the library is replaceable, the rules are not.
+  - Inspect both:
+    - project/build metadata such as `ProjectReference` and relevant `PackageReference` relationships
+    - compiled assembly/type/public-signature dependencies
+  - Enforce the approved layer matrix and reject:
+    - cross-service implementation references
+    - production dependency cycles
+    - persistence, broker, YARP, OpenIddict infrastructure, provider-adapter, or HTTP transport leakage into Domain/Application where ADR-012 forbids it
+    - infrastructure-specific types in public Application contracts
+    - direct Api dependence on Domain where prohibited
+    - direct endpoint dependence on concrete Infrastructure implementations where prohibited
+  - Enforce the production-project registry:
+    - Gateway: 1
+    - Identity: 4
+    - Catalog: 4
+    - Tracking: 4
+    - Total: 13
+  - Reject unapproved Workers and generic shared production assemblies.
+  - Fail when an expected project/assembly is missing or when a scan accidentally inspects zero expected targets.
+  - Start with no architecture exceptions.
+  - Make Architecture Tests a blocking CI check.
+- **Out of Scope:**
+  - Unit, Integration, Contract, or E2E behavior.
+  - Runtime guarantees such as transactions, Outbox atomicity, RabbitMQ acknowledgements, idempotency, or latency.
+  - A new ADR for the test library.
+  - Convenience exceptions.
+  - Profile BFF rules before that component is introduced.
+  - The rest of the CI pipeline.
+- **Dependencies:**
+  - M1-001.
+- **Acceptance Criteria:**
+  - `Shiori.ArchitectureTests` is the single global architecture-governance test project.
+  - The suite checks project metadata and compiled/type dependencies.
+  - All frozen dependency rules are executable assertions.
+  - Forbidden cross-service, Gateway, Domain/Application, Worker, and shared-assembly dependencies fail the suite.
+  - The registry expects exactly 13 baseline production projects.
+  - Missing projects or zero-target scans fail explicitly.
+  - The suite needs no database, RabbitMQ, Docker, or Internet access.
+  - CI treats an architecture-test failure as blocking.
+  - The exception list is empty.
+- **Testing:**
+  - Run the suite against the valid M1-001 graph.
+  - Prove representative forbidden-reference scenarios are detected without committing a lasting violation.
+  - Prove missing-target and zero-target cases fail.
+  - Run the suite without infrastructure or Internet access.
+  - Verify CI reports a violation as a failed required check.
+- **Definition of Done:**
+  - Architecture Tests are deterministic and green on the approved baseline.
+  - A PR cannot merge while violating an encoded frozen rule.
+  - No wildcard or convenience exception exists.
+  - The rules are clear enough to maintain when a future architecture change is explicitly accepted.
+
+## [M1-003] Establish test project structure
+- **Objective:** Give each kind of test a clear home so new Milestone 1 work does not invent a different testing layout for every feature.
+- **Architecture References:**
+  - `ADR.md` — ADR-012 testing structure.
+  - `API_CONVENTIONS.md` — public HTTP contract testing.
+  - `ROADMAP.md` — Engineering Definition of Done.
+- **Scope:**
+  - Establish the approved test organization and naming:
+    - `Shiori.Identity.UnitTests`
+    - `Shiori.Identity.IntegrationTests`
+    - `Shiori.Identity.ContractTests`
+    - `Shiori.Catalog.UnitTests`
+    - `Shiori.Catalog.IntegrationTests`
+    - `Shiori.Catalog.ContractTests`
+    - `Shiori.Tracking.UnitTests`
+    - `Shiori.Tracking.IntegrationTests`
+    - `Shiori.Tracking.ContractTests`
+    - `Shiori.Gateway.IntegrationTests`
+    - `Shiori.EndToEnd.Tests`
+    - Architecture Tests remain owned by M1-002.
+  - Create a test project when the first real test in that category exists rather than creating empty projects for symmetry.
+  - Keep responsibilities clear:
+    - Unit Tests: Domain/Application behavior without production infrastructure.
+    - Integration Tests: real infrastructure behavior.
+    - Contract Tests: public HTTP and integration-contract compatibility.
+    - E2E Tests: black-box behavior through YARP.
+  - Do not substitute EF Core InMemory or SQLite for PostgreSQL integration behavior.
+  - Test MongoDB and RabbitMQ against their real technologies when those capabilities become active.
+  - Keep live AniList/MangaDex out of deterministic CI; later provider tests use fixtures and controlled HTTP stubs.
+  - Leave exact test/assertion/mocking/container-helper libraries replaceable.
+- **Out of Scope:**
+  - M1-002 Architecture Tests.
+  - Full business suites for future Catalog, Tracking, Import, or Phase 2 work.
+  - Provider tests before provider adapters exist.
+  - A mandatory mocking framework.
+  - Empty future test projects.
+  - Coverage thresholds, full CI orchestration, load tests, or resilience tests.
+- **Dependencies:**
+  - M1-001.
+  - Can proceed alongside M1-002.
+- **Acceptance Criteria:**
+  - The approved naming and directory model is established.
+  - Unit, Integration, Contract, E2E, and Architecture responsibilities are unambiguous.
+  - Active Identity/Gateway test projects can be added without changing the model.
+  - No empty future project exists only for visual symmetry.
+  - Integration-test guidance uses the actual production database/broker technology where that behavior matters.
+  - E2E tests are black-box through YARP and have no production implementation ProjectReferences by default.
+  - Contract tests can protect OpenAPI/public HTTP behavior as endpoints appear.
+- **Testing:**
+  - Verify all currently created test projects are discovered from a clean checkout.
+  - Verify Unit Tests run without PostgreSQL, MongoDB, RabbitMQ, or provider access.
+  - Verify Integration Tests can use real containerized dependencies without leaking them into Unit Tests.
+  - Verify E2E projects have no production implementation ProjectReferences by default.
+  - Verify test execution does not rely on ordering or machine-specific paths.
+- **Definition of Done:**
+  - New Milestone 1 work has an obvious home for Unit, Integration, Contract, and E2E coverage.
+  - No placeholder test project exists without a real responsibility.
+  - The repository remains cleanly buildable/testable in CI.
+  - Architecture Tests remain separately owned by M1-002.
+
+## [M1-004] Harden local Docker Compose infrastructure
+- **Objective:** Make local infrastructure reproducible from day one, including the MongoDB replica-set behavior that later Catalog Change Streams will depend on.
+- **Architecture References:**
+  - `ROADMAP.md` — Milestone 1 local infrastructure.
+  - `ADR.md` — ADR-001, ADR-004, ADR-008.
+  - `SYSTEM_DESIGN.md` — datastore ownership and runtime topology.
+  - `ARCHITECTURE_FREEZE.md` — Database-per-Service.
+- **Scope:**
+  - Harden Docker Compose for:
+    - Identity PostgreSQL
+    - Tracking PostgreSQL
+    - Catalog MongoDB
+    - RabbitMQ
+  - Keep Identity and Tracking PostgreSQL operationally separate, including distinct database identities/credentials.
+  - Configure MongoDB as a reproducible single-node replica set.
+  - Make replica-set initialization work from both:
+    - a clean volume
+    - a normal restart
+  - Configure RabbitMQ with durable local state and a useful development management/health surface.
+  - Add meaningful health/readiness checks rather than relying only on a running process.
+  - Use named volumes where local persistence is useful and document a clean reset.
+  - Keep service names, network behavior, and host ports deterministic.
+  - Supply sensitive values through the configuration/secrets path rather than committing them to Compose.
+  - Document startup, health verification, shutdown, and reset.
+- **Out of Scope:**
+  - Production HA, clustering, Kubernetes, or cloud topology.
+  - Production backup/restore.
+  - Catalog collections, validators, indexes, or Change Stream consumers.
+  - Identity/Tracking schemas or migrations.
+  - RabbitMQ exchanges, queues, routing keys, Outbox/Inbox, or DLQ policy.
+  - Production Dockerfiles for Gateway/Identity.
+  - Real secrets, signing keys, provider credentials, or certificates.
+- **Dependencies:**
+  - M1-001.
+  - Coordinates with M1-005.
+- **Acceptance Criteria:**
+  - A clean checkout can start both PostgreSQL instances, MongoDB, and RabbitMQ through Docker Compose.
+  - Identity and Tracking use separate service-owned database credentials.
+  - MongoDB initializes as the expected single-node replica set.
+  - Replica-set state survives normal restart and can be recreated after a deliberate clean reset.
+  - RabbitMQ reports healthy and its development management surface is reachable.
+  - Infrastructure containers have meaningful health/readiness verification.
+  - No undocumented manual repair command is needed after normal startup.
+  - Volume/reset behavior is documented.
+  - No real secret is committed.
+- **Testing:**
+  - Start the stack from a clean environment and verify every component becomes ready.
+  - Verify Identity's PostgreSQL identity is not the intended Tracking identity and vice versa.
+  - Verify MongoDB replica-set status.
+  - Restart the stack and verify persistence.
+  - Reset volumes once and prove the environment bootstraps again.
+  - Verify RabbitMQ connectivity and health.
+  - Verify the setup works without committing secrets.
+- **Definition of Done:**
+  - Docker Compose provides a repeatable Milestone 1 infrastructure baseline.
+  - Database-per-Service is preserved locally.
+  - MongoDB replica-set behavior is reproducible.
+  - RabbitMQ is ready for later messaging work.
+  - Another developer or CI-like environment can follow the documented setup/reset path without hidden steps.
+
+## [M1-005] Establish environment configuration & secrets management
+- **Objective:** Give all Milestone 1 executables one predictable configuration model while keeping credentials, signing material, and machine-specific values out of source control.
+- **Architecture References:**
+  - `ROADMAP.md` — environment-specific configuration and secret management.
+  - `ADR.md` — ADR-007.
+  - `SYSTEM_DESIGN.md` — trust boundaries and least privilege.
+  - `NON_FUNCTIONAL_REQUIREMENTS.md` — sensitive-data logging rules.
+- **Scope:**
+  - Define one consistent configuration approach for Gateway, Identity, Catalog, and Tracking.
+  - Separate:
+    - committed non-sensitive defaults
+    - environment-specific overrides
+    - secrets/sensitive values
+  - Use .NET-supported local secret/environment mechanisms appropriate to each host.
+  - Allow Docker Compose to receive sensitive configuration without committing real values.
+  - Treat at least these as secrets:
+    - database credentials/connection secrets
+    - RabbitMQ credentials
+    - OpenIddict private signing/encryption material
+    - client secrets
+    - provider credentials
+    - recovery/security secrets
+  - Give each service only the configuration and credentials it owns.
+  - Avoid one shared “all databases” credential.
+  - Provide sanitized example/template configuration with names/placeholders only.
+  - Make configuration precedence deterministic.
+  - Report missing configuration clearly without echoing the secret value.
+  - Document local setup and keep the future production secret-store vendor open.
+- **Out of Scope:**
+  - Selecting a production vault/secret-manager product.
+  - Creating production signing keys.
+  - OpenIddict flows.
+  - Production key rotation.
+  - Full observability implementation.
+  - CI/CD deployment credentials.
+  - Shared service credentials for convenience.
+- **Dependencies:**
+  - M1-001.
+  - Coordinates with M1-004.
+- **Acceptance Criteria:**
+  - Tracked configuration contains no real secrets.
+  - All four executables use a consistent environment-specific model.
+  - Developers can supply secrets without editing tracked files.
+  - Docker Compose consumes sensitive values without embedding them in the tracked Compose file.
+  - Identity and Tracking use distinct PostgreSQL configuration/credentials.
+  - RabbitMQ credentials use the same safe configuration approach.
+  - OpenIddict private signing/encryption material is treated as secret.
+  - Sanitized examples make required configuration discoverable.
+  - Missing secrets fail clearly without exposing values.
+  - Secret scanning reports no credential/signing material introduced by this work.
+- **Testing:**
+  - Start the local environment from a fresh setup using non-committed secrets.
+  - Remove a required secret and verify a controlled failure.
+  - Verify sensitive values do not appear in tracked files, startup output, or normal logs.
+  - Verify Identity and Tracking do not share one PostgreSQL credential.
+  - Verify configuration names behave consistently between direct execution and Compose where applicable.
+  - Run repository secret scanning.
+- **Definition of Done:**
+  - Environment-specific configuration is deterministic and documented.
+  - No real credential, token, signing material, provider secret, or database password is committed.
+  - Service credentials remain scoped to their owner.
+  - Docker Compose consumes the model safely.
+  - Later Identity, Gateway, and service-shell work can reuse this convention without inventing another one.
+
+---
+
+# Identity Persistence & OpenIddict Foundation
+
+## [M1-006] Create Identity persistence foundation & initial migration
+- **Objective:** Give Identity one clear PostgreSQL/EF Core persistence boundary and a migration path that can be proven from an empty database before account behavior is added.
+- **Architecture References:**
+  - `ROADMAP.md` — Identity migrations and clean bootstrap.
+  - `ADR.md` — ADR-001, ADR-007, ADR-012.
+  - `NON_FUNCTIONAL_REQUIREMENTS.md` — Identity PostgreSQL durability targets.
+- **Scope:**
+  - Configure EF Core inside `Shiori.Identity.Infrastructure`.
+  - Establish Identity's service-owned `DbContext`.
+  - Prepare that persistence boundary to host OpenIddict EF Core state.
+  - Keep EF Core, PostgreSQL provider details, migrations, and persistence adapters inside Infrastructure.
+  - Keep Domain/Application independent from EF Core, PostgreSQL, and OpenIddict persistence types.
+  - Establish explicit versioned Identity migrations.
+  - Commit the initial persistence migration.
+  - Make migration behavior repeatable for:
+    - an empty database
+    - an already-current database
+    - CI validation
+  - Use only Identity-owned credentials.
+  - Reuse the M1-005 configuration/secrets model.
+- **Out of Scope:**
+  - Registration, Login, Logout, recovery, refresh, or revocation.
+  - Public endpoints.
+  - Final Account/Credential/Public Profile behavior.
+  - OpenIddict server endpoints/grants.
+  - Development signing keys.
+  - Catalog, Tracking, or cross-service persistence.
+  - Production backup/restore or deployment orchestration.
+  - External-provider identity tables.
+- **Dependencies:**
+  - M1-001.
+  - M1-004.
+  - M1-005.
+  - Uses M1-003 Integration Tests.
+- **Acceptance Criteria:**
+  - Identity connects only to its PostgreSQL datastore.
+  - `DbContext` and EF Core configuration live in Identity Infrastructure.
+  - Domain/Application have no EF Core/PostgreSQL/OpenIddict persistence dependency.
+  - The persistence boundary can host OpenIddict state without a second authentication database.
+  - At least one versioned initial migration is committed.
+  - The migration chain applies successfully to an empty PostgreSQL database.
+  - Re-running against an up-to-date database is deterministic.
+  - CI validates the migration chain against real PostgreSQL.
+  - No other Shiori component receives direct Identity database access.
+  - No database secret is committed.
+- **Testing:**
+  - Use real PostgreSQL for Identity Integration Tests.
+  - Apply migrations from empty state.
+  - Re-run bootstrap on an already-current database.
+  - Detect EF Core model/migration drift.
+  - Verify missing database configuration fails clearly.
+  - Verify migration diagnostics do not reveal passwords or connection secrets.
+- **Definition of Done:**
+  - Identity has one clear EF Core/PostgreSQL persistence boundary.
+  - The initial migration is versioned, repeatable, and CI-verifiable.
+  - Database-per-Service remains intact.
+  - M1-007 and M1-008 can build on this foundation without creating another persistence convention.
+  - Architecture Tests remain green.
+
+## [M1-007] Model Account, Credential, and Public Profile separation
+- **Objective:** Model the stable Shiori user, local authentication credential, and public profile as distinct Identity concepts so changing an email or login method never means changing the user's domain identity.
+- **Architecture References:**
+  - `ROADMAP.md` — credentials/profile separation.
+  - `ADR.md` — ADR-007 and ADR-013.
+  - `PRODUCT_HORIZON.md` — Shiori User Identity != Credential != Provider Identity.
+  - `FUTURE_STRESS_TEST.md` — stable Identity precondition.
+  - `ARCHITECTURE_FREEZE.md` — canonical Shiori UserId principle.
+- **Scope:**
+  - Establish the MVP Identity concepts:
+    - canonical Account/User identity
+    - local Credential
+    - Public Profile
+  - Preserve:
+    - `UserAccount != Credential`
+    - `UserAccount != PublicProfile`
+    - Credential data != public profile data
+  - Use a stable Shiori-owned `UserId` outside Identity.
+  - Treat email as account/credential data, never as the canonical `UserId`.
+  - Keep password-related state only in the authentication/credential concern.
+  - Keep public-profile data separate from secrets.
+  - Preserve Identity-owned profile metadata and profile-level visibility.
+  - Keep future Google/Apple/provider identities additive: they authenticate into a Shiori Account rather than replacing it.
+  - Persist these relationships inside Identity PostgreSQL.
+  - Add the required Identity migration(s).
+  - Do not reserve unused provider-link tables now.
+- **Out of Scope:**
+  - Registration/Login behavior.
+  - Full password hashing/verification flow.
+  - Recovery.
+  - Token issuance/refresh/revocation.
+  - External login providers or provider-link tables.
+  - `Unlisted` or future granular profile privacy.
+  - Tracking-owned privacy.
+  - Profile BFF.
+- **Dependencies:**
+  - M1-006.
+  - M1-001/M1-002.
+  - Uses M1-003 tests.
+- **Acceptance Criteria:**
+  - Identity has a canonical stable Shiori `UserId`.
+  - `UserId` is not derived from email, username, password credential, or provider subject.
+  - Credential persistence and Public Profile persistence are separate.
+  - Public Profile contains no password hashes, credential secrets, token material, or provider secrets.
+  - Changing email/authentication method does not require changing `UserId`.
+  - Public Profile remains Identity-owned.
+  - No speculative Google/Apple/provider model exists.
+  - Changes are represented by explicit Identity migrations.
+  - Catalog and Tracking need no credential internals.
+- **Testing:**
+  - Unit-test the identity/credential/profile separation.
+  - Verify credential-facing changes do not replace `UserId`.
+  - Verify Public Profile loads without credential-secret fields.
+  - Test persistence relationships/constraints against real PostgreSQL.
+  - Apply the full migration chain from a clean database.
+  - Verify no DTO/test uses email/provider identity as a cross-service ownership key.
+- **Definition of Done:**
+  - Account, Credential, and Public Profile are visibly separate in Identity.
+  - The canonical `UserId` is stable and provider-independent.
+  - Future external authentication remains additive.
+  - No speculative provider model was added.
+  - Migration, Unit, Integration, and Architecture Tests pass.
+
+## [M1-008] Configure OpenIddict server foundation
+- **Objective:** Bring up the standards-based OAuth2/OIDC server inside Identity without implementing Registration or Login yet.
+- **Architecture References:**
+  - `ROADMAP.md` — OpenIddict Milestone 1 requirements.
+  - `ADR.md` — ADR-007 and ADR-009.
+  - `SYSTEM_DESIGN.md` — Identity token/trust flow.
+  - `ARCHITECTURE_FREEZE.md` — OpenIddict readiness.
+- **Scope:**
+  - Configure OpenIddict inside the Identity bounded context.
+  - Store OpenIddict state in Identity PostgreSQL through M1-006.
+  - Establish:
+    - token endpoint infrastructure
+    - OAuth2/OIDC discovery metadata
+    - public signing-key/JWKS metadata for downstream validation
+    - required Identity-host validation plumbing where applicable
+  - Leave clear configuration seams for later:
+    - access-token lifecycle
+    - refresh-token lifecycle
+    - rotation
+    - revocation
+    - clients
+    - token lifetimes
+  - Make issuer/endpoint configuration environment-aware.
+  - Keep Identity as Shiori's only token issuer.
+  - Preserve the later trust path:
+    - Identity issues tokens/metadata.
+    - YARP forwards the bearer token intact.
+    - Catalog/Tracking validate independently.
+  - Use the M1-009 development signing strategy.
+  - Do not invent an introspection endpoint or another validation protocol.
+  - Add Contract/Integration coverage for server metadata and persistence.
+- **Out of Scope:**
+  - Registration, Login, password verification, recovery.
+  - User consent UI.
+  - Final production client registrations.
+  - Business authorization.
+  - Catalog/Tracking JWT validation.
+  - YARP routing.
+  - External identity providers.
+  - Manual JWT issuance.
+  - Production signing-key rotation.
+- **Dependencies:**
+  - M1-006.
+  - M1-005.
+  - M1-009 must be complete before this Issue is done.
+  - M1-007 may proceed in parallel.
+- **Acceptance Criteria:**
+  - OpenIddict runs inside `Shiori.Identity.Api`.
+  - OpenIddict persistence uses only Identity PostgreSQL.
+  - Development discovery metadata is reachable and describes the configured issuer consistently.
+  - Public JWKS/signing metadata needed for downstream validation is available.
+  - Token endpoint infrastructure exists without a Registration/Login implementation.
+  - No custom/manual JWT path exists.
+  - Protected services need no Identity database access.
+  - Configuration follows M1-005.
+  - Tokens, refresh tokens, auth headers/cookies, client secrets, and private signing keys are absent from normal logs/traces.
+  - Unsupported/not-yet-built flows fail safely.
+- **Testing:**
+  - Start OpenIddict against a clean migrated Identity PostgreSQL database.
+  - Verify discovery metadata and issuer consistency.
+  - Verify public signing metadata is available while private material is not.
+  - Verify the token endpoint belongs to OpenIddict.
+  - Verify Registration/Login did not appear accidentally.
+  - Verify logs/traces contain no credential/token/private-key material.
+  - Verify restart behavior matches M1-009.
+- **Definition of Done:**
+  - Identity has a working OpenIddict server foundation backed by its PostgreSQL store.
+  - Discovery/signing trust metadata is ready for later Gateway/protected-service work.
+  - Login and Registration remain separate Issues.
+  - No manual JWT path, cross-service DB dependency, or speculative external-provider integration exists.
+  - Contract, Integration, and Architecture Tests pass.
+
+## [M1-009] Establish development signing-key strategy
+- **Objective:** Give OpenIddict usable local signing credentials without ever treating a development private key as repository content or as a production key-management solution.
+- **Architecture References:**
+  - `ROADMAP.md` — development signing material must not be committed.
+  - `ADR.md` — ADR-007.
+  - `ARCHITECTURE_FREEZE.md` — signing-key ownership.
+  - `NON_FUNCTIONAL_REQUIREMENTS.md` — sensitive logging rules.
+- **Scope:**
+  - Choose and document one development pattern:
+    - ephemeral signing credentials, or
+    - developer-local signing material outside Git
+  - Document the selected pattern's restart/token-validity implications.
+  - Supply private material through M1-005.
+  - Expose only public verification material through discovery/JWKS.
+  - Make a fresh development setup able to create/load the required local material without a production secret-management product.
+  - Fail clearly on missing/invalid required signing configuration instead of silently adopting an unsafe fallback.
+  - Keep the development approach clearly separate from future production rotation/storage.
+  - Add repository/security checks that reduce the chance of committing private keys.
+- **Out of Scope:**
+  - Production secret-manager selection.
+  - Production private keys/certificates.
+  - Production key-rotation cadence/runbooks.
+  - HSM/KMS design.
+  - Registration/Login.
+  - Final token lifetime/refresh policy.
+  - Catalog/Tracking validation.
+- **Dependencies:**
+  - M1-005.
+  - M1-001.
+  - Coordinates with M1-006.
+  - Must be complete before M1-008 is done.
+- **Acceptance Criteria:**
+  - Identity obtains a valid development signing credential with no committed private key.
+  - The selected strategy and restart behavior are documented.
+  - Private material is absent from tracked configuration, Compose, examples, and normal logs.
+  - Public verification material is exposed without exposing the private key.
+  - A fresh developer environment has a documented setup path.
+  - Missing/malformed signing configuration fails safely where applicable.
+  - The development strategy is unmistakably non-production.
+  - Secret scanning finds no committed private signing material.
+- **Testing:**
+  - Start Identity/OpenIddict from a fresh local setup.
+  - Verify discovery/JWKS matches the active development credential.
+  - Verify no public endpoint exposes the private key.
+  - Verify logs/traces contain no private-key material.
+  - Verify tracked files introduced by the Issue contain no private certificate/key.
+  - Verify restart behavior matches the documentation.
+- **Definition of Done:**
+  - Development signing works without committed private keys.
+  - The local setup is reproducible.
+  - M1-005 and M1-008 can use the strategy directly.
+  - Production key management remains explicitly deferred.
+  - Security/secret checks pass.
+
+---
+
+# Account Flows & Profile Baseline
+
+## [M1-010] Implement Registration
+- **Objective:** Let a new user create a stable Shiori account and local credential safely, with predictable validation/conflict behavior and no authentication secrets leaking into storage or logs.
+- **Architecture References:**
+  - `ROADMAP.md` — Registration.
+  - `ADR.md` — ADR-007 and ADR-013.
+  - `API_CONVENTIONS.md` — RFC 9457 Problem Details and `409 Conflict`.
+  - `NON_FUNCTIONAL_REQUIREMENTS.md` — sensitive logging restrictions.
+  - `ARCHITECTURE_FREEZE.md` — stable Shiori identity.
+- **Scope:**
+  - Implement Registration inside Identity.
+  - Validate the public request and Identity domain rules.
+  - Create the canonical Shiori Account/User using M1-007's stable `UserId`.
+  - Create the associated local Credential.
+  - Keep email as account/credential data rather than domain identity.
+  - Never persist a plaintext password.
+  - Keep the exact hashing implementation replaceable unless separately frozen.
+  - Detect duplicate registered email.
+  - Return duplicate-email failures as RFC 9457 `application/problem+json` using `409 Conflict`.
+  - Use a stable Identity error code documented by the endpoint/OpenAPI contract.
+  - Use the shared validation Problem Details shape.
+  - Commit Account + Credential consistently so a failed registration does not leave an accepted half-created account.
+  - Add OpenAPI and Contract Test coverage.
+  - Preserve correlation/trace behavior without logging sensitive input.
+- **Out of Scope:**
+  - Login/token issuance.
+  - Refresh/revocation.
+  - Recovery.
+  - Email verification unless separately approved.
+  - Catalog/Tracking state creation.
+  - Profile BFF.
+  - External-provider registration/linking.
+  - Unapproved password-policy values.
+- **Dependencies:**
+  - M1-006.
+  - M1-007.
+  - M1-005.
+  - Uses M1-003 tests.
+- **Acceptance Criteria:**
+  - Valid registration creates one canonical Account/User and one local Credential.
+  - `UserId` is Shiori-owned and independent from email.
+  - Plaintext passwords are never stored.
+  - Registration writes only Identity-owned persistence.
+  - Registration does not issue tokens.
+  - Duplicate email returns RFC 9457 `409 Conflict` with a stable documented Identity code.
+  - Invalid input uses the shared validation Problem Details contract.
+  - Account/Credential creation is consistent; no partial accepted registration remains after failure.
+  - Passwords, password hashes, raw email addresses, auth headers/cookies, and token material do not appear in normal logs/traces.
+  - The endpoint is documented in OpenAPI.
+- **Testing:**
+  - Unit-test validation and Account/Credential orchestration.
+  - Integration-test success against real PostgreSQL.
+  - Integration-test duplicate-email behavior against real constraints.
+  - Verify failure does not leave a partial account.
+  - Contract-test success, validation, and conflict responses.
+  - Verify sensitive registration data is absent from captured logs/traces.
+  - Verify the full Identity migration chain still applies cleanly.
+- **Definition of Done:**
+  - Registration works through Identity using only Identity-owned persistence.
+  - Duplicate-email and validation behavior are contract-tested.
+  - `UserId` remains independent from credential identity.
+  - No Login, recovery, external-provider, Catalog, or Tracking behavior was introduced.
+  - Unit, Integration, Contract, and Architecture Tests pass.
+
+## [M1-011] Implement Login & Token Issuance
+- **Objective:** Authenticate local credentials against Identity and let OpenIddict issue the Access Token and Refresh Token for the stable Shiori user.
+- **Architecture References:**
+  - `ROADMAP.md` — Login and token issuance.
+  - `ADR.md` — ADR-007 and ADR-009.
+  - `API_CONVENTIONS.md` — authentication/error conventions.
+  - `NON_FUNCTIONAL_REQUIREMENTS.md` — sensitive logging rules.
+- **Scope:**
+  - Implement local-credential Login inside Identity.
+  - Resolve and verify credentials against Identity-owned persistence.
+  - Authenticate the canonical Shiori `UserId`, not the email address as domain identity.
+  - Use OpenIddict to issue:
+    - Access Token
+    - Refresh Token
+  - Keep token creation inside OpenIddict; no manual JWT implementation.
+  - Ensure the issued subject/identity maps to the stable Shiori user.
+  - Make invalid credentials non-enumerating: do not reveal whether the email/account exists.
+  - Follow Shiori application-error conventions where the Login surface returns an application-level error.
+  - Keep OAuth2/OIDC protocol responses standards-compliant.
+  - Add Contract/Integration coverage.
+  - Preserve correlation/trace metadata without recording credentials or token contents.
+- **Out of Scope:**
+  - Registration.
+  - Refresh rotation beyond initial Refresh Token issuance.
+  - Revocation.
+  - Recovery.
+  - External login providers.
+  - Catalog/Tracking JWT validation.
+  - Gateway forwarding.
+  - Business authorization.
+  - Manual JWT signing.
+- **Dependencies:**
+  - M1-006.
+  - M1-007.
+  - M1-008.
+  - M1-009.
+  - M1-010 for the normal end-to-end account creation path.
+- **Acceptance Criteria:**
+  - Valid local credentials authenticate the correct stable `UserId`.
+  - OpenIddict issues both Access and Refresh Tokens.
+  - No manual JWT-generation path exists.
+  - Email is not used as the canonical token subject/domain identity.
+  - Invalid password and unknown account use non-enumerating public failure behavior.
+  - OAuth2/OIDC protocol responses remain standards-compliant.
+  - Login reads/writes only Identity persistence.
+  - Catalog and Tracking are not dependencies.
+  - Passwords, hashes, tokens, auth headers/cookies, and raw emails are absent from normal logs/traces.
+- **Testing:**
+  - Unit-test Login orchestration and invalid-credential behavior.
+  - Integration-test success against real PostgreSQL + OpenIddict.
+  - Verify Access + Refresh Token issuance.
+  - Compare unknown-account and wrong-password public behavior.
+  - Verify token subject/identity maps to Shiori `UserId`.
+  - Verify no private signing material or token content is logged.
+  - Verify Login does not use a manual JWT service.
+- **Definition of Done:**
+  - A registered local user can authenticate and receive OpenIddict-issued Access/Refresh Tokens.
+  - Invalid credentials do not reveal account existence.
+  - Token issuance remains fully inside Identity/OpenIddict.
+  - Refresh rotation, revocation, external providers, Gateway forwarding, and downstream validation remain separate work.
+  - Unit, Integration, Contract, and Architecture Tests pass.
+
+## [M1-012] Implement Token Refresh & Revocation
+- **Objective:** Complete the first Identity token lifecycle by rotating Refresh Tokens and allowing a supported session/token grant to be revoked through OpenIddict.
+- **Architecture References:**
+  - `ROADMAP.md` — refresh and revocation.
+  - `ADR.md` — ADR-007 and ADR-009.
+  - `SYSTEM_DESIGN.md` — Identity token lifecycle.
+  - `NON_FUNCTIONAL_REQUIREMENTS.md` — token logging restrictions.
+- **Scope:**
+  - Process Refresh Tokens through OpenIddict.
+  - Enable the approved Refresh Token rotation behavior.
+  - Ensure successful refresh returns the current supported token set.
+  - Reject replaced, expired, invalid, or revoked Refresh Tokens.
+  - Implement the Identity-owned revocation endpoint/operation for a supported session/token grant.
+  - Use OpenIddict persistence/revocation mechanisms rather than manual protocol-table manipulation from unrelated layers.
+  - Keep session/token state inside Identity PostgreSQL.
+  - Keep refresh/revocation independent from Catalog and Tracking.
+  - Preserve standards-compliant protocol behavior.
+  - Add Integration/Contract coverage for success, rotation, invalid/reused tokens, and revocation.
+- **Out of Scope:**
+  - Registration/Login.
+  - Recovery/password reset.
+  - Downstream JWT validation.
+  - Gateway routing.
+  - Production signing-key rotation.
+  - Device/session-management UI.
+  - External-provider token exchange.
+  - A custom token store.
+- **Dependencies:**
+  - M1-011.
+  - Transitively M1-006, M1-008, M1-009.
+- **Acceptance Criteria:**
+  - A valid active Refresh Token can obtain a new supported token set.
+  - Rotation is enabled according to the active Identity/OpenIddict policy.
+  - Replaced, revoked, expired, or invalid Refresh Tokens cannot continue the supported refresh flow.
+  - Identity exposes the approved revocation capability.
+  - A revoked session/token grant can no longer use the revoked refresh authority successfully.
+  - Token state is stored only in Identity PostgreSQL/OpenIddict.
+  - Catalog and Tracking are not contacted during refresh/revocation.
+  - No custom token protocol/store is introduced.
+  - Raw tokens, auth headers/cookies, signing keys, and client secrets are absent from normal logs/traces.
+- **Testing:**
+  - Integration-test successful refresh against real PostgreSQL/OpenIddict.
+  - Verify rotation/replacement behavior.
+  - Verify revoked tokens cannot refresh.
+  - Verify invalid/expired Refresh Tokens fail safely.
+  - Restart Identity and verify revocation still holds.
+  - Verify no Catalog/Tracking call is made.
+  - Verify sensitive token material is not logged.
+- **Definition of Done:**
+  - Login -> Refresh -> Revocation works through OpenIddict.
+  - Rotation/revocation survive process restart.
+  - No downstream-service dependency or manual token store exists.
+  - Contract, Integration, security/logging, and Architecture Tests pass.
+
+## [M1-013] Implement Identity public profile baseline
+- **Objective:** Expose the Identity-owned profile identity and visibility decision without pulling Tracking data into Identity or implementing the full Profile BFF early.
+- **Architecture References:**
+  - `FEATURES.md` — Shareable Profile.
+  - `ADR.md` — ADR-013.
+  - `SYSTEM_DESIGN.md` — Identity owns profile identity/visibility.
+  - `API_CONVENTIONS.md` — `404`, Problem Details, DTO boundaries.
+  - `ARCHITECTURE_FREEZE.md` — Identity-first profile privacy.
+- **Scope:**
+  - Implement the Identity-owned profile read using M1-007's Public Profile model.
+  - Return:
+    - Username
+    - Avatar
+    - Bio/Biography
+    - Visibility
+  - Use an explicit API DTO rather than persistence entities.
+  - Support MVP visibility:
+    - `Private`
+    - `Public`
+  - Make Identity authoritative for visibility.
+  - Keep the contract Identity-only.
+  - Never read Tracking PostgreSQL or request Tracking library/progress/statistics.
+  - Preserve ADR-013 third-party public lookup semantics:
+    - Private -> `404 Not Found`
+    - Nonexistent -> `404 Not Found`
+  - Do not let unknown/invalid visibility default to Public.
+  - Add OpenAPI and Contract Test coverage.
+  - Leave future Identity + Tracking composition to the Profile BFF Issue.
+- **Out of Scope:**
+  - Profile BFF.
+  - Tracking profile sections, list privacy, statistics, progress, ratings, or Continue data.
+  - Friends, followers, feeds, likes, chat, or social discovery.
+  - `Unlisted`.
+  - Future granular profile controls.
+  - User/profile global search.
+  - Avatar upload/storage infrastructure.
+  - Full profile editing unless only needed for deterministic fixtures.
+- **Dependencies:**
+  - M1-007.
+  - M1-006.
+  - Independent of M1-011/M1-012 except where a test fixture needs authenticated owner access.
+- **Acceptance Criteria:**
+  - Identity returns an explicit DTO with Username, Avatar, Bio/Biography, and Visibility.
+  - The data comes only from Identity persistence.
+  - Tracking-owned fields are absent.
+  - MVP visibility supports only `Private` and `Public`.
+  - Unknown/invalid visibility fails closed.
+  - Private and nonexistent third-party lookup both return the same non-disclosing `404`.
+  - Public lookup returns only approved Identity-owned fields.
+  - Credentials, email, hashes, token state, recovery secrets, and auth internals never appear in the public profile response.
+  - Biography/private content is not copied into normal logs/traces.
+  - OpenAPI/Contract Tests cover `200` and `404` behavior.
+- **Testing:**
+  - Integration-test Public profile retrieval against real PostgreSQL.
+  - Compare Private and nonexistent lookup behavior.
+  - Verify unknown visibility fails closed.
+  - Contract-test the response fields and absence of Tracking data.
+  - Verify the read works while Tracking is unavailable because Tracking is not a dependency.
+  - Verify sensitive Identity/profile data is absent from normal logs/traces.
+- **Definition of Done:**
+  - Identity is the sole source of truth for Milestone 1 public profile metadata and profile-level visibility.
+  - ADR-013 private/nonexistent behavior is preserved.
+  - No Tracking composition, social feature, or future granular privacy model was added.
+  - OpenAPI, Integration, Contract, and Architecture Tests pass.
+
+---
+
+# Gateway & Service Shells
+
+## [M1-014] Configure YARP Gateway baseline
+- **Objective:** Make YARP Shiori's single public backend entry point while keeping it a thin edge component rather than a fourth business service.
+- **Architecture References:**
+  - `ROADMAP.md` — Gateway routing and intact bearer-token forwarding.
+  - `ADR.md` — ADR-009 and ADR-012.
+  - `SYSTEM_DESIGN.md` — Gateway responsibilities.
+  - `API_CONVENTIONS.md` — public route conventions.
+  - `ARCHITECTURE_FREEZE.md` — Gateway boundary.
+- **Scope:**
+  - Configure `Shiori.Gateway` as the Milestone 1 YARP reverse proxy.
+  - Add routes/clusters for:
+    - Identity
+    - Catalog shell
+    - Tracking shell
+  - Use public Shiori API terminology rather than internal topology in routes.
+  - Forward incoming bearer tokens downstream intact.
+  - Use M1-005 for environment-specific destinations.
+  - Support both local execution and Docker Compose service discovery.
+  - Establish baseline edge seams for:
+    - forwarded headers
+    - request timeout policy
+    - coarse request-size policy
+    - rate-limiting support
+    - safe access logging
+  - Keep business authorization in the owning service.
+- **Out of Scope:**
+  - Registration/Login/profile/Catalog/Tracking business behavior.
+  - Database access.
+  - Cross-service domain orchestration.
+  - Profile BFF.
+  - Replacing bearer tokens with trusted plain-text identity headers.
+  - Catalog/Tracking JWT validation.
+  - Correlation middleware.
+  - Production ingress topology.
+  - RabbitMQ workflows or provider integration.
+- **Dependencies:**
+  - M1-001.
+  - M1-005.
+  - M1-008 for Identity routing verification.
+  - Final Catalog/Tracking route smoke tests wait for M1-016.
+- **Acceptance Criteria:**
+  - YARP is Milestone 1's single public reverse-proxy entry point.
+  - Routes/clusters exist for Identity, Catalog, and Tracking.
+  - Public routes do not leak internal implementation names.
+  - Bearer tokens are forwarded intact.
+  - Gateway references no business-service implementation project.
+  - Gateway has no database, `DbContext`, MongoDB client, RabbitMQ business consumer, or domain-service dependency.
+  - Destinations are environment-specific.
+  - Identity is reachable through YARP.
+  - Catalog/Tracking shells become reachable after M1-016.
+  - Gateway logs do not contain auth headers, token contents, cookies, or private request bodies.
+- **Testing:**
+  - Integration-test YARP -> Identity routing.
+  - Smoke-test YARP -> Catalog/Tracking after M1-016.
+  - Verify the bearer header is forwarded unchanged.
+  - Verify public routes hide internal host/project names.
+  - Verify Gateway starts without DB/RabbitMQ credentials.
+  - Verify an unavailable destination fails as an edge/dependency failure rather than invoking business fallback logic.
+  - Verify safe logging.
+- **Definition of Done:**
+  - YARP is only the edge/router.
+  - Identity and service shells are reachable through the approved topology.
+  - Intact bearer forwarding is ready for M1-017.
+  - Configuration works with Docker Compose.
+  - Gateway Integration and Architecture Tests pass.
+
+## [M1-015] Implement correlation propagation
+- **Objective:** Make one public request traceable from YARP into the selected backend using `X-Correlation-Id` and W3C Trace Context without turning observability metadata into security or business identity.
+- **Architecture References:**
+  - `ROADMAP.md` — correlation and tracing foundations.
+  - `API_CONVENTIONS.md` — `traceparent` and `X-Correlation-Id`.
+  - `EVENT_CONTRACTS.md` — later async correlation/causation.
+  - `NON_FUNCTIONAL_REQUIREMENTS.md` — safe structured logging.
+- **Scope:**
+  - Accept a usable incoming `X-Correlation-Id` or generate one.
+  - Propagate the effective value from YARP to the backend.
+  - Return the effective correlation ID to the client where the public convention requires it.
+  - Preserve/continue W3C `traceparent`.
+  - Make correlation/trace IDs available to structured logging/tracing in Gateway, Identity, Catalog, and Tracking.
+  - Treat incoming IDs as untrusted:
+    - validate/bound them
+    - never use them for authentication
+    - never use them for authorization
+    - never use them for idempotency
+    - never use them as business identity
+  - Keep the behavior in transport/infrastructure code rather than Domain/Application business logic.
+- **Out of Scope:**
+  - RabbitMQ correlation/causation.
+  - Business IDs, `UserId`, resource IDs, or Idempotency-Key.
+  - Authentication/authorization.
+  - Observability-vendor selection.
+  - Full dashboards/metrics.
+  - Request/response body logging.
+- **Dependencies:**
+  - M1-014.
+  - M1-016 for final shell verification.
+  - M1-005 for logging/configuration conventions.
+- **Acceptance Criteria:**
+  - Missing `X-Correlation-Id` results in one effective generated ID.
+  - A valid incoming ID is propagated according to the documented convention.
+  - The effective ID reaches the backend and is visible in structured observability context.
+  - `traceparent` continues through YARP to the backend.
+  - The effective correlation ID is returned where required.
+  - Unsafe/oversized correlation values are handled safely.
+  - Correlation IDs never affect authentication, authorization, idempotency, or business identity.
+  - Sensitive headers/tokens/cookies/bodies are not logged by correlation handling.
+  - No service-specific business branch exists in the middleware.
+- **Testing:**
+  - Test a request without a correlation ID.
+  - Test a request with a valid correlation ID.
+  - Verify `traceparent` continuation.
+  - Test malformed/oversized values.
+  - Verify the same behavior across Identity, Catalog, and Tracking.
+  - Verify correlation has no effect on auth decisions.
+  - Verify safe observability output.
+- **Definition of Done:**
+  - Requests can be followed consistently from YARP into each Milestone 1 backend.
+  - Trace context and human-friendly correlation remain separate but complementary.
+  - Correlation IDs are operational metadata only.
+  - Gateway/service Integration Tests pass.
+
+## [M1-016] Harden Catalog & Tracking service shells
+- **Objective:** Turn Catalog and Tracking into clean, runnable Milestone 1 API hosts with health/OpenAPI/observability, but no premature domain or persistence implementation.
+- **Architecture References:**
+  - `ROADMAP.md` — protected Catalog/Tracking shells.
+  - `ADR.md` — ADR-001, ADR-003, ADR-012.
+  - `API_CONVENTIONS.md` — OpenAPI/public API consistency.
+  - `SYSTEM_DESIGN.md` — service ownership.
+  - `ARCHITECTURE_FREEZE.md` — project registry.
+- **Scope:**
+  - Harden `Shiori.Catalog.Api` and `Shiori.Tracking.Api`.
+  - Remove default ASP.NET demo/template behavior.
+  - Add health surfaces.
+  - Add OpenAPI generation.
+  - Establish baseline Problem Details/error-pipeline compatibility where applicable.
+  - Add structured logging/tracing hooks compatible with M1-015.
+  - Keep both hosts independently runnable for development/integration testing.
+  - Provide a minimal protected verification surface for M1-017.
+  - Keep Catalog free of real MongoDB/provider implementation in M1.
+  - Keep Tracking free of real PostgreSQL/domain persistence in M1.
+  - Keep references aligned with ADR-012.
+- **Out of Scope:**
+  - Catalog persistence, franchises, works, providers, Change Streams, search, or discovery.
+  - Tracking persistence, library, progress, history, projections, imports, or Release Intelligence.
+  - RabbitMQ producers/consumers, Inbox/Outbox, or message contracts.
+  - AniList/MangaDex access.
+  - Business authorization beyond the minimal authentication verification surface.
+  - Profile BFF.
+  - Placeholder domain entities created only to fill folders.
+- **Dependencies:**
+  - M1-001.
+  - M1-003.
+  - M1-005.
+  - Coordinates with M1-014/M1-015.
+- **Acceptance Criteria:**
+  - Catalog and Tracking start independently.
+  - Both expose health checks appropriate to their shell responsibilities.
+  - Both generate valid OpenAPI.
+  - Default demo/template endpoints are gone.
+  - Both participate in structured logging/tracing.
+  - Both provide the minimal protected verification surface for M1-017.
+  - Catalog does not require MongoDB/providers for current shell behavior.
+  - Tracking does not require domain PostgreSQL persistence for current shell behavior.
+  - Neither service reads Identity PostgreSQL.
+  - No cross-service implementation reference exists.
+- **Testing:**
+  - Start both services and verify health.
+  - Validate their OpenAPI documents.
+  - Confirm no unwanted demo route remains.
+  - Confirm neither shell requires its future domain datastore.
+  - Verify correlation/trace context after M1-015.
+  - Route both through YARP after M1-014.
+  - Keep Architecture Tests green.
+- **Definition of Done:**
+  - Catalog and Tracking are clean, runnable, observable Milestone 1 shells.
+  - Health and OpenAPI baselines exist.
+  - No premature domain/persistence work was added.
+  - The protected verification surfaces are ready for M1-017.
+  - Integration, Contract where applicable, and Architecture Tests pass.
+
+## [M1-017] Implement independent JWT validation
+- **Objective:** Make Catalog and Tracking independently trust Identity-issued Access Tokens by validating them locally from standards-based issuer/signing metadata rather than calling Identity's database or application on every request.
+- **Architecture References:**
+  - `ROADMAP.md` — independent token validation.
+  - `ADR.md` — ADR-007 and ADR-009.
+  - `SYSTEM_DESIGN.md` — local protected-service validation.
+  - `API_CONVENTIONS.md` — `401` vs `403`.
+  - `NON_FUNCTIONAL_REQUIREMENTS.md` — safe cached discovery/signing behavior during partial Identity outages.
+- **Scope:**
+  - Configure authentication in Catalog and Tracking for Identity-issued Access Tokens.
+  - Validate locally using OIDC discovery/signing metadata.
+  - Validate the active token contract's required properties:
+    - signature
+    - issuer
+    - lifetime
+    - intended usage/audience when configured
+  - Resolve the authenticated principal to the stable Shiori `UserId`.
+  - Use normal discovery/signing-key caching/refresh so protected requests do not call Identity synchronously each time.
+  - Never read Identity PostgreSQL/OpenIddict tables from Catalog or Tracking.
+  - Protect the M1-016 verification endpoints.
+  - Keep intentionally public health/discovery surfaces anonymous.
+  - Return `401 Unauthorized` when authentication cannot be established.
+  - Keep later resource/business authorization separate.
+  - Use the original bearer token forwarded by YARP, not a trusted `X-User-Id` replacement.
+  - Add Integration/Contract coverage for valid and invalid token cases.
+- **Out of Scope:**
+  - Catalog/Tracking business authorization.
+  - Identity database access.
+  - Per-request token introspection.
+  - Gateway-only validation as the sole security boundary.
+  - Trusted plain-text user identity headers.
+  - Registration/Login/Refresh/Revocation implementation.
+  - Unrelated service-to-service authentication.
+  - Profile BFF auth.
+  - Catalog/Tracking persistence created only for authentication.
+- **Dependencies:**
+  - M1-008.
+  - M1-009.
+  - M1-011.
+  - M1-014.
+  - M1-016.
+  - M1-015 for complete observability verification, not for the auth decision itself.
+- **Acceptance Criteria:**
+  - Catalog accepts a valid Identity-issued Access Token without Identity DB access.
+  - Tracking does the same.
+  - Both derive the authenticated user from the stable Identity subject/claim rather than email or a Gateway-created identity header.
+  - Missing credentials produce `401`.
+  - Expired, malformed, invalid-signature, and wrong-issuer tokens are rejected.
+  - Invalid audience/intended use is rejected when that check is part of the active token contract.
+  - A valid token forwarded through YARP is accepted downstream unchanged.
+  - Catalog/Tracking do not call an Identity application endpoint for every protected request.
+  - Neither service has Identity PostgreSQL credentials.
+  - Authentication is configured independently in both services.
+  - Public health endpoints still work anonymously where intended.
+  - Authentication failures do not log bearer-token contents.
+- **Testing:**
+  - Test a valid Identity-issued token directly against both shells.
+  - Repeat through YARP.
+  - Test missing, malformed, expired, wrong-issuer, and invalid-signature tokens.
+  - Test audience/intended-use rules when configured.
+  - Verify the principal resolves to the stable Shiori `UserId`.
+  - Verify Catalog/Tracking have no Identity DB credentials.
+  - Verify repeated protected requests do not require synchronous Identity application/database lookup.
+  - Verify a temporary Identity API outage does not automatically invalidate an already-valid token while safe cached discovery/signing material remains available.
+  - Verify bearer-token contents are absent from normal logs/traces.
+- **Definition of Done:**
+  - Catalog and Tracking independently enforce authentication.
+  - Identity remains the issuer while each protected service remains its own validation boundary.
+  - No direct Identity database dependency, per-request Identity auth call, trusted identity header, or Gateway-only shortcut exists.
+  - The flow works directly and through YARP.
+  - Integration, Contract where applicable, security/logging, and Architecture Tests pass.
+
+---
+
+# Consolidated Milestone 1 status
+
+This file currently covers the approved backlog from **M1-001 through M1-017**:
+
+| Range | Area |
+|---|---|
+| M1-001 — M1-005 | Foundation & Infrastructure |
+| M1-006 — M1-009 | Identity Persistence & OpenIddict Foundation |
+| M1-010 — M1-013 | Account Flows & Profile Baseline |
+| M1-014 — M1-017 | Gateway & Service Shells |
+
+The Issues are written to preserve the Architecture Freeze while still leaving replaceable implementation details replaceable. They describe the behavior and boundaries that must be true when each Issue closes; they do not prescribe code structure beyond what ADR-012 and the other frozen documents already decided.
+
+Milestone 1 itself is not complete simply because these Issues exist. Completion still depends on implementing the remaining approved Milestone 1 work and satisfying the Roadmap exit criteria end to end through YARP.
