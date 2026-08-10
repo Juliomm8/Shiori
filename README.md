@@ -1,4 +1,4 @@
-# Shiori
+# Shiori (栞)
 
 > **One library. Every story. Never lose your place.**
 
