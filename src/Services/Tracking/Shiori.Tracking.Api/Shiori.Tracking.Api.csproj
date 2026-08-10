@@ -11,4 +11,9 @@
     <PackageReference Include="Microsoft.OpenApi" Version="2.10.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Shiori.Tracking.Application\Shiori.Tracking.Application.csproj" />
+    <ProjectReference Include="..\Shiori.Tracking.Infrastructure\Shiori.Tracking.Infrastructure.csproj" />
+  </ItemGroup>
+
 </Project>
