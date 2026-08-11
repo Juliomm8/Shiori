@@ -41,6 +41,12 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Shiori.Tracking.Application
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Shiori.Tracking.Infrastructure", "src\Services\Tracking\Shiori.Tracking.Infrastructure\Shiori.Tracking.Infrastructure.csproj", "{4CE59374-253D-4B47-853F-1BFC12EE9BCF}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Architecture", "Architecture", "{875CD587-DE2F-08EE-74FB-D6BE4E474EF3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Shiori.ArchitectureTests", "tests\Architecture\Shiori.ArchitectureTests\Shiori.ArchitectureTests.csproj", "{31266E87-2F5E-47BF-B373-63102BDCBB17}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -207,6 +213,18 @@ Global
 		{4CE59374-253D-4B47-853F-1BFC12EE9BCF}.Release|x64.Build.0 = Release|Any CPU
 		{4CE59374-253D-4B47-853F-1BFC12EE9BCF}.Release|x86.ActiveCfg = Release|Any CPU
 		{4CE59374-253D-4B47-853F-1BFC12EE9BCF}.Release|x86.Build.0 = Release|Any CPU
+		{31266E87-2F5E-47BF-B373-63102BDCBB17}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{31266E87-2F5E-47BF-B373-63102BDCBB17}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{31266E87-2F5E-47BF-B373-63102BDCBB17}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{31266E87-2F5E-47BF-B373-63102BDCBB17}.Debug|x64.Build.0 = Debug|Any CPU
+		{31266E87-2F5E-47BF-B373-63102BDCBB17}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{31266E87-2F5E-47BF-B373-63102BDCBB17}.Debug|x86.Build.0 = Debug|Any CPU
+		{31266E87-2F5E-47BF-B373-63102BDCBB17}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{31266E87-2F5E-47BF-B373-63102BDCBB17}.Release|Any CPU.Build.0 = Release|Any CPU
+		{31266E87-2F5E-47BF-B373-63102BDCBB17}.Release|x64.ActiveCfg = Release|Any CPU
+		{31266E87-2F5E-47BF-B373-63102BDCBB17}.Release|x64.Build.0 = Release|Any CPU
+		{31266E87-2F5E-47BF-B373-63102BDCBB17}.Release|x86.ActiveCfg = Release|Any CPU
+		{31266E87-2F5E-47BF-B373-63102BDCBB17}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -230,5 +248,7 @@ Global
 		{25DD6ED4-54A1-4A7D-980A-4A708D495369} = {4E97729A-C2DF-5990-EA33-8F909D65E19E}
 		{C493090C-FA1B-40A9-8CEC-2E9459DEBACC} = {4E97729A-C2DF-5990-EA33-8F909D65E19E}
 		{4CE59374-253D-4B47-853F-1BFC12EE9BCF} = {4E97729A-C2DF-5990-EA33-8F909D65E19E}
+		{875CD587-DE2F-08EE-74FB-D6BE4E474EF3} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{31266E87-2F5E-47BF-B373-63102BDCBB17} = {875CD587-DE2F-08EE-74FB-D6BE4E474EF3}
 	EndGlobalSection
 EndGlobal
