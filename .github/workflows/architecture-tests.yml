@@ -1,0 +1,42 @@
+name: Architecture Tests
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  architecture-tests:
+    name: Architecture Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore ./Shiori.sln
+
+      - name: Build
+        run: >
+          dotnet build ./Shiori.sln
+          --configuration Release
+          --no-restore
+
+      - name: Run Architecture Tests
+        run: >
+          dotnet test
+          ./tests/Architecture/Shiori.ArchitectureTests/Shiori.ArchitectureTests.csproj
+          --configuration Release
+          --no-build
+          --no-restore
