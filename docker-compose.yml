@@ -1,41 +1,51 @@
 services:
   postgres-identity:
-    image: postgres:18
+    image: postgres:18.4-trixie
     container_name: shiori-postgres-identity
     restart: unless-stopped
     environment:
       POSTGRES_USER: shiori_identity
-      POSTGRES_PASSWORD: shiori_identity_dev_password
+      POSTGRES_PASSWORD: ${SHIORI_IDENTITY_POSTGRES_PASSWORD:?SHIORI_IDENTITY_POSTGRES_PASSWORD is required}
       POSTGRES_DB: shiori_identity
     ports:
       - "5432:5432"
     volumes:
       - postgres-identity-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U shiori_identity"]
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=\"$${POSTGRES_PASSWORD}\" psql -w -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -v ON_ERROR_STOP=1 -c 'SELECT 1;' >/dev/null 2>&1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
     networks:
       - shiori-network
 
   postgres-tracking:
-    image: postgres:18
+    image: postgres:18.4-trixie
     container_name: shiori-postgres-tracking
     restart: unless-stopped
     environment:
       POSTGRES_USER: shiori_tracking
-      POSTGRES_PASSWORD: shiori_tracking_dev_password
+      POSTGRES_PASSWORD: ${SHIORI_TRACKING_POSTGRES_PASSWORD:?SHIORI_TRACKING_POSTGRES_PASSWORD is required}
       POSTGRES_DB: shiori_tracking
     ports:
       - "5433:5432"
     volumes:
       - postgres-tracking-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U shiori_tracking"]
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=\"$${POSTGRES_PASSWORD}\" psql -w -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -v ON_ERROR_STOP=1 -c 'SELECT 1;' >/dev/null 2>&1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
     networks:
       - shiori-network
 
