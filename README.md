@@ -289,25 +289,40 @@ The README is intentionally a map, not a second copy of those documents.
 
 ## Local development
 
-The complete product is **not yet ready for a one-command local run**.
+The complete Shiori product is not yet available as a one-command local application run because the Gateway and business service hosts are still being implemented.
 
-The repository contains the initial solution and Docker infrastructure skeleton, but Milestone 1 still has to harden that environment and bring the service hosts in line with the frozen architecture.
-
-The intended local baseline is:
+The Milestone 1 **infrastructure baseline**, however, is runnable through Docker Compose and currently provides:
 
 ```text
-YARP Gateway
-Identity API
-Catalog API shell
-Tracking API shell
-
 Identity PostgreSQL
 Tracking PostgreSQL
-Catalog MongoDB replica set
+Catalog MongoDB single-node replica set
 RabbitMQ
 ```
 
-Exact setup commands will belong here once the Milestone 1 infrastructure path is verified from a clean checkout. I would rather leave this section temporarily incomplete than document commands that only work on my machine.
+Before starting the stack, supply the required local environment variables:
+
+```text
+SHIORI_IDENTITY_POSTGRES_PASSWORD
+SHIORI_TRACKING_POSTGRES_PASSWORD
+SHIORI_RABBITMQ_PASSWORD
+```
+
+Then validate and start the infrastructure:
+
+```powershell
+docker compose config --quiet
+docker compose up -d
+docker compose ps -a
+```
+
+Expected persistent services should become healthy, while the one-shot `mongodb-init` helper should finish successfully with `Exited (0)`.
+
+The complete operational setup, verification, logs, restart, shutdown, PostgreSQL isolation checks, MongoDB replica-set checks, RabbitMQ readiness checks, and clean-reset procedure are documented in:
+
+[`docs/LOCAL_INFRASTRUCTURE.md`](docs/LOCAL_INFRASTRUCTURE.md)
+
+Project-wide environment/secrets conventions are intentionally deferred to `M1-005`.
 
 ---
 
