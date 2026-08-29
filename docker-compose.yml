@@ -67,24 +67,30 @@ services:
       - shiori-network
 
   rabbitmq:
-    image: rabbitmq:4-management
+    image: rabbitmq:4.3.5-management
     container_name: shiori-rabbitmq
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: shiori
-      RABBITMQ_DEFAULT_PASS: shiori_dev_password
+      RABBITMQ_DEFAULT_PASS: ${SHIORI_RABBITMQ_PASSWORD:?SHIORI_RABBITMQ_PASSWORD is required}
     ports:
       - "5672:5672"
       - "15672:15672"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test:
+        [
+          "CMD-SHELL",
+          "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_port_connectivity",
+        ]
       interval: 10s
-      timeout: 5s
-      retries: 5
+      timeout: 10s
+      retries: 6
+      start_period: 30s
     networks:
       - shiori-network
+
 
 networks:
   shiori-network:
