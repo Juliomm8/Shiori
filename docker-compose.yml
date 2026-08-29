@@ -1,41 +1,51 @@
 services:
   postgres-identity:
-    image: postgres:18
+    image: postgres:18.4-trixie
     container_name: shiori-postgres-identity
     restart: unless-stopped
     environment:
       POSTGRES_USER: shiori_identity
-      POSTGRES_PASSWORD: shiori_identity_dev_password
+      POSTGRES_PASSWORD: ${SHIORI_IDENTITY_POSTGRES_PASSWORD:?SHIORI_IDENTITY_POSTGRES_PASSWORD is required}
       POSTGRES_DB: shiori_identity
     ports:
       - "5432:5432"
     volumes:
       - postgres-identity-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U shiori_identity"]
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=\"$${POSTGRES_PASSWORD}\" psql -w -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -v ON_ERROR_STOP=1 -c 'SELECT 1;' >/dev/null 2>&1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
     networks:
       - shiori-network
 
   postgres-tracking:
-    image: postgres:18
+    image: postgres:18.4-trixie
     container_name: shiori-postgres-tracking
     restart: unless-stopped
     environment:
       POSTGRES_USER: shiori_tracking
-      POSTGRES_PASSWORD: shiori_tracking_dev_password
+      POSTGRES_PASSWORD: ${SHIORI_TRACKING_POSTGRES_PASSWORD:?SHIORI_TRACKING_POSTGRES_PASSWORD is required}
       POSTGRES_DB: shiori_tracking
     ports:
       - "5433:5432"
     volumes:
       - postgres-tracking-data:/var/lib/postgresql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U shiori_tracking"]
+      test:
+        [
+          "CMD-SHELL",
+          "PGPASSWORD=\"$${POSTGRES_PASSWORD}\" psql -w -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\" -v ON_ERROR_STOP=1 -c 'SELECT 1;' >/dev/null 2>&1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
     networks:
       - shiori-network
 
@@ -57,24 +67,30 @@ services:
       - shiori-network
 
   rabbitmq:
-    image: rabbitmq:4-management
+    image: rabbitmq:4.3.5-management
     container_name: shiori-rabbitmq
     restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: shiori
-      RABBITMQ_DEFAULT_PASS: shiori_dev_password
+      RABBITMQ_DEFAULT_PASS: ${SHIORI_RABBITMQ_PASSWORD:?SHIORI_RABBITMQ_PASSWORD is required}
     ports:
       - "5672:5672"
       - "15672:15672"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      test:
+        [
+          "CMD-SHELL",
+          "rabbitmq-diagnostics -q check_running && rabbitmq-diagnostics -q check_port_connectivity",
+        ]
       interval: 10s
-      timeout: 5s
-      retries: 5
+      timeout: 10s
+      retries: 6
+      start_period: 30s
     networks:
       - shiori-network
+
 
 networks:
   shiori-network:
